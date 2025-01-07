@@ -5,7 +5,9 @@ from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split as tts
+
 from datasets import DatasetGenerator, PairedMNISTDataset
+from helpers import EarlyStopper, one_run
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -70,3 +72,4 @@ val_loader: DataLoader = DataLoader(
     batch_size=8
 )
 
+num_base_epochs = 20
