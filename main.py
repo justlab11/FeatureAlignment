@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split as tts
 
 from datasets import DatasetGenerator, PairedMNISTDataset
 from helpers import EarlyStopper, one_run
+from models import TinyCNN, TinyCNN_Headless
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -73,3 +74,61 @@ val_loader: DataLoader = DataLoader(
 )
 
 num_base_epochs = 20
+base_early_stopper = EarlyStopper(
+    patience=5,
+    min_delta=0
+)
+
+model = TinyCNN()
+optimizer = optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+
+for epoch in range(num_base_epochs):
+    train_loss, train_acc = one_run(
+        model=model,
+        optimizer=optimizer,
+        dataloader=train_loader,
+        device=DEVICE,
+    )
+
+    val_loss, val_acc = one_run(
+        model=model,
+        optimizer=optimizer,
+        dataloader=val_loader,
+        device=DEVICE,
+        train=False
+    )
+
+    print(f"Epoch {epoch}:", round(train_loss, 4), round(train_acc, 4)*100, round(val_loss, 4), round(val_acc, 4)*100)
+
+    if base_early_stopper(val_loss):
+        print("Stopped")
+        break
+
+print("\n\n\n\n\n")
+
+model = TinyCNN()
+optimizer = optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+
+for epoch in range(num_base_epochs):
+    train_loss, train_acc = one_run(
+        model=model,
+        optimizer=optimizer,
+        dataloader=train_loader,
+        mode="base_and_aux",
+        device=DEVICE,
+    )
+
+    val_loss, val_acc = one_run(
+        model=model,
+        optimizer=optimizer,
+        dataloader=val_loader,
+        device=DEVICE,
+        mode="base_and_aux",
+        train=False
+    )
+
+    print(f"Epoch {epoch}:", round(train_loss, 4), round(train_acc, 4)*100, round(val_loss, 4), round(val_acc, 4)*100)
+
+    if base_early_stopper(val_loss):
+        print("Stopped")
+        break
