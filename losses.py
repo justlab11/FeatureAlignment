@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def supervised_contrastive_loss(features, labels, temperature=0.07):
+def supervised_contrastive_loss(features, labels, temperature):
     """
     Compute the supervised contrastive loss
     

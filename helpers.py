@@ -6,7 +6,7 @@ import torch.optim as optim
 from losses import supervised_contrastive_loss
 
 
-def one_run(model, optimizer, dataloader, device, mode='base_only', train=True):
+def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True):
     """
     Run one epoch of training or evaluation on the given dataset.
     
@@ -21,13 +21,8 @@ def one_run(model, optimizer, dataloader, device, mode='base_only', train=True):
     - Average loss for the epoch
     - Accuracy for the epoch (for classification) or None (for contrastive)
     """
-    
-    if mode in ['base_only', 'base_and_aux']:
-        criterion = nn.CrossEntropyLoss()
-    elif mode == 'contrastive':
-        criterion = supervised_contrastive_loss
-    else:
-        raise ValueError("Mode must be 'base_only', 'base_and_aux', or 'contrastive'")
+
+    criterion = nn.CrossEntropyLoss()
     
     if train:
         model.train()
@@ -53,7 +48,7 @@ def one_run(model, optimizer, dataloader, device, mode='base_only', train=True):
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
             
-            elif mode == 'base_and_aux':
+            else:
                 inputs = torch.cat((base_samples, aux_samples), 0)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels.repeat(2))
@@ -61,11 +56,6 @@ def one_run(model, optimizer, dataloader, device, mode='base_only', train=True):
                 _, predicted = outputs.max(1)
                 total += labels.size(0) * 2
                 correct += predicted.eq(labels.repeat(2)).sum().item()
-            
-            else:  # contrastive
-                inputs = torch.cat((base_samples, aux_samples), 0)
-                features = model(inputs)
-                loss = criterion(features, labels.repeat(2))
         
         if train:
             loss.backward()
@@ -74,10 +64,46 @@ def one_run(model, optimizer, dataloader, device, mode='base_only', train=True):
         running_loss += loss.item()
     
     epoch_loss = running_loss / len(dataloader)
-    epoch_accuracy = correct / total if mode != 'contrastive' else None
+    epoch_accuracy = correct / total
     
     return epoch_loss, epoch_accuracy
 
+def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True, temperature=0.07):
+    """
+    Run one epoch of contrastive learning training or evaluation.
+    """
+    criterion = supervised_contrastive_loss
+    
+    if train:
+        model.train()
+        proj_head.train()
+    else:
+        model.eval()
+        proj_head.eval()
+    
+    running_loss = 0.0
+    
+    for base_samples, aux_samples, labels in dataloader:
+        base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
+        
+        if train:
+            optimizer.zero_grad()
+        
+        with torch.set_grad_enabled(train):
+            inputs = torch.cat((base_samples, aux_samples), 0)
+            features = model(inputs)
+            projected = proj_head(features)
+            loss = criterion(projected, labels.repeat(2), temperature=temperature)
+        
+        if train:
+            loss.backward()
+            optimizer.step()
+        
+        running_loss += loss.item()
+    
+    epoch_loss = running_loss / len(dataloader)
+    
+    return epoch_loss
 
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
