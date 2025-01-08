@@ -9,7 +9,7 @@ import os
 
 from datasets import DatasetGenerator, PairedMNISTDataset
 from helpers import EarlyStopper, classification_run, contrastive_run
-from models import TinyCNN, TinyCNN_Headless
+from models import TinyCNN, TinyCNN_Headless, WrapperModelTrainHead
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -26,17 +26,41 @@ x_test, x_val, y_test, y_val = tts(
     x_test, y_test, test_size=.5
 )
 
-ds_generator: DatasetGenerator = DatasetGenerator(
-    base_ds="red"
+train_ds_gen: DatasetGenerator = DatasetGenerator(
+    images = x_train,
+    labels = y_train,
+    subset_ratio = .2,
 )
 
-base_images_train, base_labels_train = ds_generator.build_base_dataset(x_train, y_train)
-base_images_test, base_labels_test = ds_generator.build_base_dataset(x_test, y_test)
-base_images_val, base_labels_val = ds_generator.build_base_dataset(x_val, y_val)
+base_images_train, base_labels_train = train_ds_gen.build_base_dataset()
+aux_images_train, aux_labels_train = train_ds_gen.build_aux_dataset()
 
-aux_images_train, aux_labels_train = ds_generator.build_aux_dataset(x_train, y_train)
-aux_images_test, aux_labels_test = ds_generator.build_aux_dataset(x_test, y_test)
-aux_images_val, aux_labels_val = ds_generator.build_aux_dataset(x_val, y_val)
+print(f"Train Dataset Base Size: {len(base_images_train)}")
+print(f"Train Dataset Aux Size: {len(aux_images_train)}")
+
+test_ds_gen: DatasetGenerator = DatasetGenerator(
+    images = x_test,
+    labels = y_test,
+    subset_ratio = .95,
+)
+
+base_images_test, base_labels_test = test_ds_gen.build_base_dataset()
+aux_images_test, aux_labels_test = test_ds_gen.build_aux_dataset()
+
+print(f"Test Dataset Base Size: {len(base_images_test)}")
+print(f"Test Dataset Aux Size: {len(aux_images_test)}")
+
+val_ds_gen: DatasetGenerator = DatasetGenerator(
+    images = x_val,
+    labels = y_val,
+    subset_ratio = .95,
+)
+
+base_images_val, base_labels_val = val_ds_gen.build_base_dataset()
+aux_images_val, aux_labels_val = val_ds_gen.build_aux_dataset()
+
+print(f"Validation Dataset Base Size: {len(base_images_val)}")
+print(f"Validation Dataset Aux Size: {len(aux_images_val)}")
 
 train_dataset: PairedMNISTDataset = PairedMNISTDataset(
     base_images=base_images_train,
@@ -61,7 +85,8 @@ val_dataset: PairedMNISTDataset = PairedMNISTDataset(
 
 train_loader: DataLoader = DataLoader(
     dataset=train_dataset,
-    batch_size=8
+    batch_size=8,
+    shuffle=True
 )
 
 test_loader: DataLoader = DataLoader(
@@ -139,7 +164,6 @@ if not os.path.exists("models/aux_model.pt"):
         "val_loss": 1000,
         "val_acc": 0
     }
-    base_aux_model = TinyCNN()
 
     for epoch in range(num_base_epochs):
         train_loss, train_acc = classification_run(
@@ -210,11 +234,9 @@ best_val_loss = 1000*np.ones(len(temp_range))
 for i, temp in enumerate(temp_range):
     model = TinyCNN_Headless()
     proj_head = torch.nn.Linear(32, 128)
-    class_head = torch.nn.Linear(32, 10)
 
     model.to(DEVICE)
     proj_head.to(DEVICE)
-    class_head.to(DEVICE)
 
     contrast_optimizer = optim.Adam(
         list(model.parameters()) + list(proj_head.parameters()),
@@ -249,13 +271,74 @@ for i, temp in enumerate(temp_range):
 
         if val_loss < best_val_loss[i]:
             best_val_loss[i] = val_loss
-            torch.save(model.state_dict(), f"models/contrast_body_{temp}.pt")
-            torch.save(proj_head.state_dict(), f"models/contrast_proj_{temp}.pt")
+            torch.save(model.state_dict(), f"models/contrast_body_{round(temp, 2)}.pt")
+            torch.save(proj_head.state_dict(), f"models/contrast_proj_{round(temp, 2)}.pt")
 
         if contrast_early_stopper(val_loss):
             print("Stopped")
             break
 
-print(f"Best temp: {temp_range[np.argmin(best_val_loss)]}")
+best_temp = round(temp_range[np.argmin(best_val_loss)], 2)
+print(f"Best temp: {best_temp}")
 
-# TODO: add contrastive classification head training
+# train contrastive learning classifier
+
+num_class_epochs = 20
+
+contrast_body = TinyCNN_Headless()
+contrast_body.load_state_dict(torch.load(f"models/contrast_body_{best_temp}.pt", weights_only=True))
+
+class_head = torch.nn.Sequential(
+    torch.nn.Linear(32,32),
+    torch.nn.Linear(32,10)
+)
+
+wrapped_model = WrapperModelTrainHead(
+    body = contrast_body,
+    head = class_head
+)
+wrapped_model.to(DEVICE)
+optimizer = optim.Adam(
+    wrapped_model.head.parameters(),
+    lr = 0.001,
+    weight_decay = 1e-5
+)
+
+base_early_stopper = EarlyStopper(
+    patience=5,
+    min_delta=0
+)
+
+base_aux_best = {
+    "val_loss": 1000,
+    "val_acc": 0
+}
+
+for epoch in range(num_class_epochs):
+    train_loss, train_acc = classification_run(
+        model=wrapped_model,
+        optimizer=optimizer,
+        dataloader=train_loader,
+        mode="base",
+        device=DEVICE,
+    )
+
+    val_loss, val_acc = classification_run(
+        model=wrapped_model,
+        optimizer=optimizer,
+        dataloader=val_loader,
+        device=DEVICE,
+        mode="base",
+        train=False
+    )
+
+    print(f"Epoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2))
+
+    if val_loss < base_aux_best["val_loss"]:
+        base_aux_best["val_loss"] = val_loss
+        base_aux_best["val_acc"] = val_acc
+        torch.save(model.state_dict(), "models/contrast_class.pt")
+
+    if base_early_stopper(val_loss):
+        print("Stopped")
+        break

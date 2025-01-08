@@ -57,17 +57,30 @@ class PairedMNISTDataset(Dataset):
 
 
 class DatasetGenerator:
-    def __init__(self, base_ds="red"):
+    def __init__(self, images, labels, subset_ratio=.3, base_ds="red", train=True):
         self.base_ds = base_ds
+        self.train = train
 
-    def build_base_dataset(self, images, labels):
-        if self.base_ds == "red":
-            return self._create_red_mnist(images), labels
+        if train:
+            base_subset_size = int(images.shape[0]*subset_ratio)
         else:
-            return self._create_red_shade_mnist(images), labels
+            base_subset_size = images.shape[0]
 
-    def build_aux_dataset(self, images, labels, subset_ratio=.5):
-        return self._create_colorful_subset(images, labels, subset_ratio)
+        indices = np.random.choice(images.shape[0], images.shape[0], replace=False)
+        self.base_images = images[indices[:base_subset_size]].copy()
+        self.base_labels = labels[indices[:base_subset_size]].copy()
+        
+        self.aux_images = images[indices[base_subset_size:]].copy()
+        self.aux_labels = labels[indices[base_subset_size:]].copy()
+
+    def build_base_dataset(self):
+        if self.base_ds == "red":
+            return self._create_red_mnist(self.base_images), self.base_labels
+        else:
+            return self._create_red_shade_mnist(self.base_images), self.base_labels
+
+    def build_aux_dataset(self):
+        return self._create_colorful_subset(self.aux_images, self.aux_labels)
 
     def _create_red_mnist(self, images):
         red_images = np.zeros((images.shape[0], 3, 28, 28), dtype=np.uint8)
@@ -83,15 +96,11 @@ class DatasetGenerator:
             red_images[i] = np.stack([red_channel, np.zeros_like(img), np.zeros_like(img)])
         return red_images
 
-    def _create_colorful_subset(self, images, labels, subset_ratio):
-        subset_size = int(images.shape[0]*subset_ratio)
-        indices = np.random.choice(images.shape[0], subset_size, replace=False)
-        images_subset = images[indices].copy()
-        labels_subset = labels[indices].copy()
-        color_images = np.zeros((subset_size, 3, 28, 28), dtype=np.uint8)
-        for i, img in enumerate(images_subset):
+    def _create_colorful_subset(self, images, labels):
+        color_images = np.zeros((len(images), 3, 28, 28), dtype=np.uint8)
+        for i, img in enumerate(images):
             color = np.random.randint(1, 256, size=3) / 255
             color_images[i] = np.stack(
                 [color[0] * img, color[1] * img, color[2] * img]
             )  
-        return color_images, labels_subset
+        return color_images, labels

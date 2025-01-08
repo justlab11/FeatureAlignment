@@ -2,4 +2,5 @@ venv
 test.ipynb
 data
 models
+images
 __pycache__
