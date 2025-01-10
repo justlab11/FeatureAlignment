@@ -57,8 +57,9 @@ class PairedMNISTDataset(Dataset):
 
 
 class DatasetGenerator:
-    def __init__(self, images, labels, subset_ratio=.3, base_ds="red", train=True):
+    def __init__(self, images, labels, subset_ratio=.3, base_ds="red", aux_ds="color", train=True):
         self.base_ds = base_ds
+        self.aux_ds = aux_ds
         self.train = train
 
         if train:
@@ -76,11 +77,18 @@ class DatasetGenerator:
     def build_base_dataset(self):
         if self.base_ds == "red":
             return self._create_red_mnist(self.base_images), self.base_labels
-        else:
+        elif self.base_ds == "red shade":
             return self._create_red_shade_mnist(self.base_images), self.base_labels
+        else:
+            return self.base_images, self.base_labels
 
     def build_aux_dataset(self):
-        return self._create_colorful_subset(self.aux_images, self.aux_labels)
+        if self.aux_ds == "color":
+            return self._create_colorful_subset(self.aux_images, self.aux_labels)
+        elif self.aux_ds == "skip":
+            return self._create_skip_subset(self.aux_images, self.aux_labels)
+        else:
+            return self.aux_images, self.aux_labels
 
     def _create_red_mnist(self, images):
         red_images = np.zeros((images.shape[0], 3, 28, 28), dtype=np.uint8)
@@ -104,3 +112,20 @@ class DatasetGenerator:
                 [color[0] * img, color[1] * img, color[2] * img]
             )  
         return color_images, labels
+    
+    def _create_skip_subset(self, images, labels):
+        lines_on = 3
+        lines_off = 2
+
+        if images.ndim == 3:
+            images = np.stack([images] * 3, axis=1)  # Add channel dimension
+
+        mask_on = np.ones((images.shape[0], images.shape[1], lines_on, images.shape[3]))
+        mask_off = np.zeros((images.shape[0], images.shape[1], lines_off, images.shape[3]))
+
+        mask_cycle = np.concatenate([mask_on, mask_off], axis=2)
+        num_cycles = int(np.ceil(images.shape[2] / mask_cycle.shape[2]))
+        full_mask = np.tile(mask_cycle, (1, 1, num_cycles, 1))[:, :, :images.shape[2], :]
+
+        skip_images = images * full_mask
+        return skip_images, labels

@@ -3,7 +3,6 @@ import torchvision
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split as tts
 import os
 
@@ -23,7 +22,7 @@ x_test = mnist_test.data.numpy()
 y_test = mnist_test.targets.numpy()
 
 x_test, x_val, y_test, y_val = tts(
-    x_test, y_test, test_size=.5
+    x_test, y_test, test_size=.5, random_state=71
 )
 
 train_ds_gen: DatasetGenerator = DatasetGenerator(
@@ -104,7 +103,7 @@ if not os.path.exists("models"):
 
 ### Base model
 
-if not os.path.exists("models/base_model.pt"):
+if not os.path.exists("models/base_model_plain.pt"):
     num_base_epochs = 20
 
     model = TinyCNN()
@@ -141,7 +140,7 @@ if not os.path.exists("models/base_model.pt"):
         if val_loss < base_best["val_loss"]:
             base_best["val_loss"] = val_loss
             base_best["val_acc"] = val_acc
-            torch.save(model.state_dict(), "models/base_model.pt")
+            torch.save(model.state_dict(), "models/base_model_plain.pt")
 
         if base_early_stopper(val_loss):
             print("Stopped")
@@ -151,7 +150,7 @@ if not os.path.exists("models/base_model.pt"):
 
 ### Base + aux model
 
-if not os.path.exists("models/aux_model.pt"):
+if not os.path.exists("models/aux_model_plain+skips.pt"):
     model = TinyCNN()
     model.to(DEVICE)
     optimizer = optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
@@ -188,7 +187,7 @@ if not os.path.exists("models/aux_model.pt"):
         if val_loss < base_aux_best["val_loss"]:
             base_aux_best["val_loss"] = val_loss
             base_aux_best["val_acc"] = val_acc
-            torch.save(model.state_dict(), "models/aux_model.pt")
+            torch.save(model.state_dict(), "models/aux_model_plain+skips.pt")
 
         if base_early_stopper(val_loss):
             print("Stopped")
@@ -200,7 +199,7 @@ if not os.path.exists("models/aux_model.pt"):
 optimizer = None # Set to None so it can't train
 
 base_model = TinyCNN()
-base_model.load_state_dict(torch.load("models/base_model.pt", weights_only=True))
+base_model.load_state_dict(torch.load("models/base_model_plain.pt", weights_only=True))
 base_model.to(DEVICE)
 base_loss, base_acc = classification_run(
     model=base_model,
@@ -212,7 +211,7 @@ base_loss, base_acc = classification_run(
 )
 
 aux_model = TinyCNN()
-aux_model.load_state_dict(torch.load("models/aux_model.pt", weights_only=True))
+aux_model.load_state_dict(torch.load("models/aux_model_plain+skips.pt", weights_only=True))
 aux_model.to(DEVICE)
 aux_loss, aux_acc = classification_run(
     model=aux_model,
@@ -271,12 +270,17 @@ for i, temp in enumerate(temp_range):
 
         if val_loss < best_val_loss[i]:
             best_val_loss[i] = val_loss
-            torch.save(model.state_dict(), f"models/contrast_body_{round(temp, 2)}.pt")
-            torch.save(proj_head.state_dict(), f"models/contrast_proj_{round(temp, 2)}.pt")
+            torch.save(model.state_dict(), f"models/contrast_body_plain+skips_{round(temp, 2)}.pt")
+            torch.save(proj_head.state_dict(), f"models/contrast_proj_plain+skips_{round(temp, 2)}.pt")
 
         if contrast_early_stopper(val_loss):
-            print("Stopped")
+            print("\n")
+            print("Best Val Loss:", best_val_loss[i])
             break
+
+        if (epoch+1 == num_contrast_epochs):
+            print("\n")
+            print("Best Val Loss:", best_val_loss[i])
 
 best_temp = round(temp_range[np.argmin(best_val_loss)], 2)
 print(f"Best temp: {best_temp}")
@@ -286,7 +290,7 @@ print(f"Best temp: {best_temp}")
 num_class_epochs = 20
 
 contrast_body = TinyCNN_Headless()
-contrast_body.load_state_dict(torch.load(f"models/contrast_body_{best_temp}.pt", weights_only=True))
+contrast_body.load_state_dict(torch.load(f"models/contrast_body_plain+skips_{best_temp}.pt", weights_only=True))
 
 class_head = torch.nn.Sequential(
     torch.nn.Linear(32,32),
@@ -304,12 +308,12 @@ optimizer = optim.Adam(
     weight_decay = 1e-5
 )
 
-base_early_stopper = EarlyStopper(
+contrast_early_stopper = EarlyStopper(
     patience=5,
     min_delta=0
 )
 
-base_aux_best = {
+contrast_best = {
     "val_loss": 1000,
     "val_acc": 0
 }
@@ -334,11 +338,18 @@ for epoch in range(num_class_epochs):
 
     print(f"Epoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2))
 
-    if val_loss < base_aux_best["val_loss"]:
-        base_aux_best["val_loss"] = val_loss
-        base_aux_best["val_acc"] = val_acc
-        torch.save(model.state_dict(), "models/contrast_class.pt")
+    if val_loss < contrast_best["val_loss"]:
+        contrast_best["val_loss"] = val_loss
+        contrast_best["val_acc"] = val_acc
+        torch.save(wrapped_model.state_dict(), "models/contrast_class_plain+skips.pt")
 
-    if base_early_stopper(val_loss):
-        print("Stopped")
+    if contrast_early_stopper(val_loss):
+        print("\n")
+        print("Best Val Loss:", contrast_best["val_loss"])
+        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
         break
+
+    if (epoch+1 == num_class_epochs):
+        print("\n")
+        print("Best Val Loss:", contrast_best["val_loss"])
+        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
