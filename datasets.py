@@ -80,7 +80,7 @@ class DatasetGenerator:
         elif self.base_ds == "red shade":
             return self._create_red_shade_mnist(self.base_images), self.base_labels
         else:
-            return self.base_images, self.base_labels
+            return np.stack([self.base_images] * 3, axis=1), self.base_labels
 
     def build_aux_dataset(self):
         if self.aux_ds == "color":
@@ -88,7 +88,7 @@ class DatasetGenerator:
         elif self.aux_ds == "skip":
             return self._create_skip_subset(self.aux_images, self.aux_labels)
         else:
-            return self.aux_images, self.aux_labels
+            return np.stack([self.aux_images] * 3, axis=1), self.aux_labels
 
     def _create_red_mnist(self, images):
         red_images = np.zeros((images.shape[0], 3, 28, 28), dtype=np.uint8)
