@@ -115,7 +115,7 @@ class DatasetGenerator:
     
     def _create_skip_subset(self, images, labels):
         lines_on = 3
-        lines_off = 2
+        lines_off = 3
 
         if images.ndim == 3:
             images = np.stack([images] * 3, axis=1)  # Add channel dimension
