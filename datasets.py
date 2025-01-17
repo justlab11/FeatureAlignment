@@ -33,25 +33,38 @@ class PairedMNISTDataset(Dataset):
         self.aux_images: torch.tensor = torch.from_numpy(aux_images).float() / 255.0
         self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
 
-        self.indices_by_class = self._group_indices_by_class()
+        self.base_indices_by_class = self._group_indices_by_class(self.base_labels)
+        self.aux_indices_by_class = self._group_indices_by_class(self.aux_labels)
+
+        self.mode = "base+aux"
 
     def __len__(self):
         return len(self.base_images)
     
-    def _group_indices_by_class(self):
+    def _group_indices_by_class(self, labels):
         indices_by_class = {i: [] for i in range(10)}
 
-        for idx, label in enumerate(self.aux_labels):
+        for idx, label in enumerate(labels):
             indices_by_class[label.item()].append(idx)
 
         return indices_by_class
     
     def __getitem__(self, idx):
+        # TODO: add self.mode functionality
         label = self.base_labels[idx].item()
-        base_sample = self.base_images[idx]
-
-        aux_idx = np.random.choice(self.indices_by_class[label])
-        aux_sample = self.aux_images[aux_idx]
+        pair_selection = np.random.uniform()
+        if pair_selection < .5: # combine base and auxiliary
+            base_sample = self.base_images[idx]
+            aux_idx = np.random.choice(self.aux_indices_by_class[label])
+            aux_sample = self.aux_images[aux_idx]
+        if .5 <= pair_selection < .75: # combine base and base
+            base_sample = self.base_images[idx]
+            aux_idx = np.random.choice(self.base_indices_by_class[label])
+            aux_sample = self.base_images[aux_idx]
+        else: # combine auxiliary and auxiliary
+            aux_idx = np.random.choice(self.aux_indices_by_class[label])
+            base_sample = self.aux_images[aux_idx]
+            aux_sample = self.aux_images[aux_idx]
 
         return base_sample, aux_sample, label
 
@@ -79,10 +92,18 @@ class DatasetGenerator:
             return self._create_red_mnist(self.base_images), self.base_labels
         elif self.base_ds == "red shade":
             return self._create_red_shade_mnist(self.base_images), self.base_labels
+        elif self.base_ds == "color":
+            return self._create_colorful_subset(self.base_images, self.base_labels)
+        elif self.base_ds == "skip":
+            return self._create_skip_subset(self.base_images, self.base_labels)
         else:
             return np.stack([self.base_images] * 3, axis=1), self.base_labels
 
     def build_aux_dataset(self):
+        if self.aux_ds == "red":
+            return self._create_red_mnist(self.aux_images), self.aux_labels
+        elif self.aux_ds == "red shade":
+            return self._create_red_shade_mnist(self.aux_images), self.aux_labels
         if self.aux_ds == "color":
             return self._create_colorful_subset(self.aux_images, self.aux_labels)
         elif self.aux_ds == "skip":

@@ -29,6 +29,8 @@ train_ds_gen: DatasetGenerator = DatasetGenerator(
     images = x_train,
     labels = y_train,
     subset_ratio = .2,
+    base_ds="none",
+    aux_ds="skip"
 )
 
 base_images_train, base_labels_train = train_ds_gen.build_base_dataset()
@@ -40,7 +42,9 @@ print(f"Train Dataset Aux Size: {len(aux_images_train)}")
 test_ds_gen: DatasetGenerator = DatasetGenerator(
     images = x_test,
     labels = y_test,
-    subset_ratio = .95,
+    subset_ratio = .5,
+    base_ds="none",
+    aux_ds="skip"
 )
 
 base_images_test, base_labels_test = test_ds_gen.build_base_dataset()
@@ -52,7 +56,9 @@ print(f"Test Dataset Aux Size: {len(aux_images_test)}")
 val_ds_gen: DatasetGenerator = DatasetGenerator(
     images = x_val,
     labels = y_val,
-    subset_ratio = .95,
+    subset_ratio = .5,
+    base_ds="none",
+    aux_ds="skip"
 )
 
 base_images_val, base_labels_val = val_ds_gen.build_base_dataset()
@@ -323,7 +329,7 @@ for epoch in range(num_class_epochs):
         model=wrapped_model,
         optimizer=optimizer,
         dataloader=train_loader,
-        mode="base",
+        mode="base_and_aux",
         device=DEVICE,
     )
 
@@ -332,7 +338,7 @@ for epoch in range(num_class_epochs):
         optimizer=optimizer,
         dataloader=val_loader,
         device=DEVICE,
-        mode="base",
+        mode="base_and_aux",
         train=False
     )
 
