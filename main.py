@@ -8,7 +8,7 @@ import os
 
 from datasets import DatasetGenerator, PairedMNISTDataset
 from helpers import EarlyStopper, classification_run, contrastive_run
-from models import TinyCNN, TinyCNN_Headless, WrapperModelTrainHead
+from models import TinyCNN, TinyCNN_Headless, TinyCNN_Head, WrapperModelTrainHead
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -130,6 +130,7 @@ if not os.path.exists("models/base_model_plain.pt"):
             model=model,
             optimizer=optimizer,
             dataloader=train_loader,
+            mode="base_only",
             device=DEVICE,
         )
 
@@ -137,6 +138,7 @@ if not os.path.exists("models/base_model_plain.pt"):
             model=model,
             optimizer=optimizer,
             dataloader=val_loader,
+            mode="base_only",
             device=DEVICE,
             train=False
         )
@@ -184,7 +186,7 @@ if not os.path.exists("models/aux_model_plain+skips.pt"):
             optimizer=optimizer,
             dataloader=val_loader,
             device=DEVICE,
-            mode="base_and_aux",
+            mode="base_only",
             train=False
         )
 
@@ -298,10 +300,7 @@ num_class_epochs = 20
 contrast_body = TinyCNN_Headless()
 contrast_body.load_state_dict(torch.load(f"models/contrast_body_plain+skips_{best_temp}.pt", weights_only=True))
 
-class_head = torch.nn.Sequential(
-    torch.nn.Linear(32,32),
-    torch.nn.Linear(32,10)
-)
+class_head = TinyCNN_Head()
 
 wrapped_model = WrapperModelTrainHead(
     body = contrast_body,
@@ -338,7 +337,7 @@ for epoch in range(num_class_epochs):
         optimizer=optimizer,
         dataloader=val_loader,
         device=DEVICE,
-        mode="base_and_aux",
+        mode="base_only",
         train=False
     )
 

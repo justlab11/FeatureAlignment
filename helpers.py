@@ -32,6 +32,11 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
     running_loss = 0.0
     correct = 0
     total = 0
+
+    if mode == "base_only":
+        dataloader.dataset.unique_sources = True 
+    else:
+        dataloader.dataset.unique_sources = False
     
     for base_samples, aux_samples, labels in dataloader:
         base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
@@ -41,7 +46,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
         
         with torch.set_grad_enabled(train):
             if mode == 'base_only':
-                outputs = model(base_samples)
+                outputs = model(base_samples)[-1]
                 loss = criterion(outputs, labels)
                 
                 _, predicted = outputs.max(1)
@@ -50,7 +55,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
             
             else:
                 inputs = torch.cat((base_samples, aux_samples), 0)
-                outputs = model(inputs)
+                outputs = model(inputs)[-1]
                 loss = criterion(outputs, labels.repeat(2))
                 
                 _, predicted = outputs.max(1)
@@ -91,7 +96,7 @@ def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True,
         
         with torch.set_grad_enabled(train):
             inputs = torch.cat((base_samples, aux_samples), 0)
-            features = model(inputs)
+            features = model(inputs)[-1]
             projected = proj_head(features)
             loss = criterion(projected, labels.repeat(2), temperature=temperature)
         

@@ -36,7 +36,7 @@ class PairedMNISTDataset(Dataset):
         self.base_indices_by_class = self._group_indices_by_class(self.base_labels)
         self.aux_indices_by_class = self._group_indices_by_class(self.aux_labels)
 
-        self.mode = "base+aux"
+        self.unique_sources = False
 
     def __len__(self):
         return len(self.base_images)
@@ -53,15 +53,15 @@ class PairedMNISTDataset(Dataset):
         # TODO: add self.mode functionality
         label = self.base_labels[idx].item()
         pair_selection = np.random.uniform()
-        if pair_selection < .5: # combine base and auxiliary
+        if pair_selection < .5 or self.unique_sources: # if 0 <= pair_selection < .5:  combine base and auxiliary
             base_sample = self.base_images[idx]
             aux_idx = np.random.choice(self.aux_indices_by_class[label])
             aux_sample = self.aux_images[aux_idx]
-        if .5 <= pair_selection < .75: # combine base and base
+        if pair_selection < .75: # if .5 <= pair_selection < .75: combine base and base
             base_sample = self.base_images[idx]
             aux_idx = np.random.choice(self.base_indices_by_class[label])
             aux_sample = self.base_images[aux_idx]
-        else: # combine auxiliary and auxiliary
+        else: # if .75 <= pair_selection <= 1: combine auxiliary and auxiliary
             aux_idx = np.random.choice(self.aux_indices_by_class[label])
             base_sample = self.aux_images[aux_idx]
             aux_sample = self.aux_images[aux_idx]
