@@ -237,7 +237,7 @@ contrast_body.load_state_dict(torch.load(f"models/contrast_body_plain+skips.pt",
 contrast_body.eval()
 
 unet_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-    in_channels=1, out_channels=1, init_features=32, pretrained=False)
+    in_channels=3, out_channels=3, init_features=32, pretrained=False)
 
 unet_optimizer = optim.Adam(
     unet_model.parameters(),
