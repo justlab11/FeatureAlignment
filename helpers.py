@@ -55,6 +55,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
             
             else:
                 inputs = torch.cat((base_samples, aux_samples), 0)
+
                 outputs = model(inputs)[-1]
                 loss = criterion(outputs, labels.repeat(2))
                 

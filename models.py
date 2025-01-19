@@ -206,7 +206,7 @@ class TinyCNN_Headless(nn.Module):
 class TinyCNN_Head(nn.Module):
     def __init__(self):
         super(TinyCNN_Head, self).__init__()
-        self.fc1 = torch.nn.Linear(32,32),
+        self.fc1 = torch.nn.Linear(32,32)
         self.fc2 = torch.nn.Linear(32,10)
 
     def forward(self, x):

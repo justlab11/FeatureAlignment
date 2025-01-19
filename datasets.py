@@ -57,13 +57,14 @@ class PairedMNISTDataset(Dataset):
             base_sample = self.base_images[idx]
             aux_idx = np.random.choice(self.aux_indices_by_class[label])
             aux_sample = self.aux_images[aux_idx]
-        if pair_selection < .75: # if .5 <= pair_selection < .75: combine base and base
+        elif pair_selection < .75: # if .5 <= pair_selection < .75: combine base and base
             base_sample = self.base_images[idx]
             aux_idx = np.random.choice(self.base_indices_by_class[label])
             aux_sample = self.base_images[aux_idx]
         else: # if .75 <= pair_selection <= 1: combine auxiliary and auxiliary
             aux_idx = np.random.choice(self.aux_indices_by_class[label])
             base_sample = self.aux_images[aux_idx]
+            aux_idx = np.random.choice(self.aux_indices_by_class[label])
             aux_sample = self.aux_images[aux_idx]
 
         return base_sample, aux_sample, label

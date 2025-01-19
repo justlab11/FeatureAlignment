@@ -233,9 +233,9 @@ aux_loss, aux_acc = classification_run(
 print(f"Base: {round(base_loss, 4)}, {round(base_acc*100, 2)}")
 print(f"Base + Aux: {round(aux_loss, 4)}, {round(aux_acc*100, 2)}")
 
-### Contrastive learning model
+# ### Contrastive learning model
 num_contrast_epochs = 200
-temp_range = np.linspace(0.05, .5, 10)
+temp_range = np.linspace(0.05, .15, 3)
 best_val_loss = 1000*np.ones(len(temp_range))
 
 for i, temp in enumerate(temp_range):
@@ -283,12 +283,12 @@ for i, temp in enumerate(temp_range):
 
         if contrast_early_stopper(val_loss):
             print("\n")
-            print("Best Val Loss:", best_val_loss[i])
+            print(f"Best Val Loss ({round(temp, 2)}):", best_val_loss[i])
             break
 
         if (epoch+1 == num_contrast_epochs):
             print("\n")
-            print("Best Val Loss:", best_val_loss[i])
+            print(f"Best Val Loss ({round(temp, 2)}):", best_val_loss[i])
 
 best_temp = round(temp_range[np.argmin(best_val_loss)], 2)
 print(f"Best temp: {best_temp}")
@@ -298,7 +298,7 @@ print(f"Best temp: {best_temp}")
 num_class_epochs = 20
 
 contrast_body = TinyCNN_Headless()
-contrast_body.load_state_dict(torch.load(f"models/contrast_body_plain+skips_{best_temp}.pt", weights_only=True))
+contrast_body.load_state_dict(torch.load(f"models/contrast_body_plain+skips_{0.1}.pt", weights_only=True))
 
 class_head = TinyCNN_Head()
 
