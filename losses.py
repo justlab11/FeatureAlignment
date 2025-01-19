@@ -48,3 +48,26 @@ def supervised_contrastive_loss(features, labels, temperature):
     
     return loss
     
+
+class SlicedWasserstein(torch.nn.Module):
+    def __init__(self, num_projections=128):
+        super().__init__()
+        self.num_projections = num_projections
+
+    def forward(self, x, y):
+        # Generate random projections
+        device = x.device
+        projections = torch.randn(self.num_projections, x.shape[1], device=device)
+        projections = projections / torch.norm(projections, dim=1, keepdim=True)
+
+        # Project the data
+        x_proj = torch.matmul(x, projections.t())
+        y_proj = torch.matmul(y, projections.t())
+
+        # Sort projections
+        x_proj_sort, _ = torch.sort(x_proj, dim=0)
+        y_proj_sort, _ = torch.sort(y_proj, dim=0)
+
+        # Compute Wasserstein distance
+        w_dist = torch.mean(torch.abs(x_proj_sort - y_proj_sort))
+        return w_dist

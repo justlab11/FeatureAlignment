@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 
-from losses import supervised_contrastive_loss
+from losses import supervised_contrastive_loss, SlicedWasserstein
 
 
 def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True):
@@ -110,6 +110,48 @@ def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True,
     epoch_loss = running_loss / len(dataloader)
     
     return epoch_loss
+
+def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
+    criterion = SlicedWasserstein(num_projections=256)
+    unet_model.to(device)
+    classifier.to(device)
+
+    if train:
+        unet_model.train()
+    else:
+        unet_model.eval()
+
+    classifier.eval()
+
+    running_loss = 0.0
+
+    for base_samples, aux_samples, _ in dataloader: 
+        base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+        if train:
+            optimizer.zero_grad()
+
+        with torch.set_grad_enabled(train):
+            unet_images = unet_model(aux_samples)
+
+        with torch.no_grad():
+            base_reps = classifier(base_samples)
+            aux_reps = classifier(unet_images)
+        
+        loss = 0
+        for i in range(len(base_reps)):
+            loss += criterion(base_reps[i], aux_reps[i])
+
+        if train:
+            loss.backward()
+            optimizer.step()
+
+        running_loss += loss.item()
+
+    epoch_loss = running_loss / len(dataloader)
+
+    return epoch_loss
+
+
 
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
