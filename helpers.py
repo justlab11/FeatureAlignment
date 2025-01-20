@@ -112,7 +112,7 @@ def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True,
     
     return epoch_loss
 
-def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
+def old_unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
     upscale_transform = transforms.Resize((256, 256))
 
     criterion = SlicedWasserstein(num_projections=256)
@@ -156,6 +156,49 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
 
     return epoch_loss
 
+def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
+    upscale_transform = transforms.Resize((32, 32))
+
+    criterion = SlicedWasserstein(num_projections=256)
+    unet_model.to(device)
+    classifier.to(device)
+
+    if train:
+        unet_model.train()
+    else:
+        unet_model.eval()
+
+    classifier.eval()
+
+    running_loss = 0.0
+
+    for base_samples, aux_samples, _ in dataloader: 
+        aux_samples = upscale_transform(aux_samples)
+
+        base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+        if train:
+            optimizer.zero_grad()
+
+        with torch.set_grad_enabled(train):
+            unet_output = unet_model(aux_samples)
+            unet_images = nn.functional.interpolate(unet_output, size=(28, 28), mode='bilinear', align_corners=False)
+
+            base_reps = classifier(base_samples)
+            aux_reps = classifier(unet_images)
+        
+        loss = 0
+        for i in range(len(base_reps)):
+            loss += criterion(base_reps[i], aux_reps[i])
+
+        if train:
+            loss.backward()
+            optimizer.step()
+
+        running_loss += loss.item()
+
+    epoch_loss = running_loss / len(dataloader)
+
+    return epoch_loss
 
 
 class EarlyStopper:

@@ -251,3 +251,49 @@ class WrapperModelTrainHead(nn.Module):
         head = self.head(embed[-1])
 
         return embed + head
+    
+class CustomUNET(nn.Module):
+    def __init__(self):
+        super(CustomUNET, self).__init__()
+        
+        # Encoder
+        self.enc1 = self.conv_block(3, 32)
+        self.enc2 = self.conv_block(32, 64)
+        self.enc3 = self.conv_block(64, 128)
+        self.enc4 = self.conv_block(128, 256)
+        self.enc5 = self.conv_block(256, 512)
+        
+        # Decoder
+        self.dec4 = self.conv_block(768, 256)
+        self.dec3 = self.conv_block(384, 128)
+        self.dec2 = self.conv_block(192, 64)
+        self.dec1 = self.conv_block(96, 32)
+        
+        self.final = nn.Conv2d(32, 32, kernel_size=1)
+        
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        
+    def conv_block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x):
+        # Encoder
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
+        e4 = self.enc4(self.pool(e3))
+        e5 = self.enc5(self.pool(e4))  # This is the 2x2x512 latent space
+        
+        # Decoder
+        d4 = self.dec4(torch.cat([self.upsample(e5), e4], dim=1))
+        d3 = self.dec3(torch.cat([self.upsample(d4), e3], dim=1))
+        d2 = self.dec2(torch.cat([self.upsample(d3), e2], dim=1))
+        d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
+        
+        return self.final(d1)
