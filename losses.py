@@ -55,14 +55,20 @@ class SlicedWasserstein(torch.nn.Module):
         self.num_projections = num_projections
 
     def forward(self, x, y):
+        assert x.shape == y.shape, "Input tensors must have the same shape"
+
+        # Flatten spatial dimensions
+        x_flat = x.view(x.size(0), x.size(1), -1)
+        y_flat = y.view(y.size(0), y.size(1), -1)
+
         # Generate random projections
         device = x.device
-        projections = torch.randn(self.num_projections, x.shape[1], device=device)
+        projections = torch.randn(self.num_projections, x_flat.size(-1), device=device)
         projections = projections / torch.norm(projections, dim=1, keepdim=True)
 
         # Project the data
-        x_proj = torch.matmul(x, projections.t())
-        y_proj = torch.matmul(y, projections.t())
+        x_proj = torch.matmul(x_flat, projections.t())
+        y_proj = torch.matmul(y_flat, projections.t())
 
         # Sort projections
         x_proj_sort, _ = torch.sort(x_proj, dim=0)

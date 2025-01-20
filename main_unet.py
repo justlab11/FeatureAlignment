@@ -170,67 +170,68 @@ if not os.path.exists(f"models_unet/contrast_body_plain+skips.pt"):
     os.rename(f"models_unet/contrast_body_plain+skips_{best_temp}.pt", f"models_unet/contrast_body_plain+skips.pt")
 
 # train contrastive learning classifier
-num_class_epochs = 20
+if not os.path.exists("models_unet/contrast_class_plain+skips.pt"):
+    num_class_epochs = 20
 
-contrast_body = TinyCNN_Headless()
-contrast_body.load_state_dict(torch.load(f"models_unet/contrast_body_plain+skips.pt", weights_only=True))
+    contrast_body = TinyCNN_Headless()
+    contrast_body.load_state_dict(torch.load(f"models_unet/contrast_body_plain+skips.pt", weights_only=True))
 
-class_head = TinyCNN_Head()
+    class_head = TinyCNN_Head()
 
-wrapped_model = WrapperModelTrainHead(
-    body = contrast_body,
-    head = class_head
-)
-wrapped_model.to(DEVICE)
-optimizer = optim.Adam(
-    wrapped_model.head.parameters(),
-    lr = 0.001,
-    weight_decay = 1e-5
-)
-
-contrast_early_stopper = EarlyStopper(
-    patience=5,
-    min_delta=0
-)
-
-contrast_best = {
-    "val_loss": 1000,
-    "val_acc": 0
-}
-
-for epoch in range(num_class_epochs):
-    train_loss, train_acc = classification_run(
-        model=wrapped_model,
-        optimizer=optimizer,
-        dataloader=train_loader,
-        mode="base_and_aux",
-        device=DEVICE,
+    wrapped_model = WrapperModelTrainHead(
+        body = contrast_body,
+        head = class_head
+    )
+    wrapped_model.to(DEVICE)
+    optimizer = optim.Adam(
+        wrapped_model.head.parameters(),
+        lr = 0.001,
+        weight_decay = 1e-5
     )
 
-    val_loss, val_acc = classification_run(
-        model=wrapped_model,
-        optimizer=optimizer,
-        dataloader=val_loader,
-        device=DEVICE,
-        mode="base_only",
-        train=False
+    contrast_early_stopper = EarlyStopper(
+        patience=5,
+        min_delta=0
     )
 
-    print(f"Epoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2))
+    contrast_best = {
+        "val_loss": 1000,
+        "val_acc": 0
+    }
 
-    if val_loss < contrast_best["val_loss"]:
-        contrast_best["val_loss"] = val_loss
-        contrast_best["val_acc"] = val_acc
-        torch.save(wrapped_model.state_dict(), "models_unet/contrast_class_plain+skips.pt")
+    for epoch in range(num_class_epochs):
+        train_loss, train_acc = classification_run(
+            model=wrapped_model,
+            optimizer=optimizer,
+            dataloader=train_loader,
+            mode="base_and_aux",
+            device=DEVICE,
+        )
 
-    if contrast_early_stopper(val_loss):
-        print("\nBest Val Loss:", contrast_best["val_loss"])
-        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
-        break
+        val_loss, val_acc = classification_run(
+            model=wrapped_model,
+            optimizer=optimizer,
+            dataloader=val_loader,
+            device=DEVICE,
+            mode="base_only",
+            train=False
+        )
 
-    if (epoch+1 == num_class_epochs):
-        print("\nBest Val Loss:", contrast_best["val_loss"])
-        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
+        print(f"Epoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2))
+
+        if val_loss < contrast_best["val_loss"]:
+            contrast_best["val_loss"] = val_loss
+            contrast_best["val_acc"] = val_acc
+            torch.save(wrapped_model.state_dict(), "models_unet/contrast_class_plain+skips.pt")
+
+        if contrast_early_stopper(val_loss):
+            print("\nBest Val Loss:", contrast_best["val_loss"])
+            print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
+            break
+
+        if (epoch+1 == num_class_epochs):
+            print("\nBest Val Loss:", contrast_best["val_loss"])
+            print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
 
 # training the unet model
 contrast_body = TinyCNN_Headless()

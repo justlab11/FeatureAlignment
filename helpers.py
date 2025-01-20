@@ -137,10 +137,9 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
 
         with torch.set_grad_enabled(train):
             unet_output = unet_model(aux_samples)
-
-        with torch.no_grad():
-            base_reps = classifier(base_samples)
             unet_images = nn.functional.interpolate(unet_output, size=(28, 28), mode='bilinear', align_corners=False)
+
+            base_reps = classifier(base_samples)
             aux_reps = classifier(unet_images)
         
         loss = 0
