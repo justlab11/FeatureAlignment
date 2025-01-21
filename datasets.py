@@ -5,6 +5,7 @@ import torch.optim as optim
 from torchvision.models import resnet18
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+from PIL import Image
 from sklearn.model_selection import train_test_split as tts
 
 class PairedMNISTDataset(Dataset):
@@ -27,10 +28,13 @@ class PairedMNISTDataset(Dataset):
             aux_labels: np.ndarray
         ):
         
-        self.base_images: torch.tensor = torch.from_numpy(base_images).float() / 255.0
+        resized_base_images = Image.fromarray(base_images.reshape(28, 28)).resize((32, 32), Image.BILINEAR)
+        resized_aux_images = Image.fromarray(aux_images.reshape(28, 28)).resize((32, 32), Image.BILINEAR)
+
+        self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
         self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
 
-        self.aux_images: torch.tensor = torch.from_numpy(aux_images).float() / 255.0
+        self.aux_images: torch.tensor = torch.from_numpy(resized_aux_images).float() / 255.0
         self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
 
         self.base_indices_by_class = self._group_indices_by_class(self.base_labels)

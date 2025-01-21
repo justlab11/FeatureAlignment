@@ -82,7 +82,7 @@ class TinyCNN(nn.Module):
         self.conv1 = nn.Conv2d(3, 8, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1)
-        self.fc1 = nn.Linear(16 * 7 * 7, 32)
+        self.fc1 = nn.Linear(16 * 8 * 8, 32)
         self.fc2 = nn.Linear(32, 32)
         self.fc3 = nn.Linear(32, 10)
 
@@ -122,7 +122,7 @@ class TinyCNN(nn.Module):
         layer_outputs.append(pool2_out)
         
         # Flatten
-        flattened = pool2_out.view(-1, 16 * 7 * 7)
+        flattened = pool2_out.view(-1, 16 * 8 * 8)
         layer_outputs.append(flattened)
         
         # Fully connected layer 1
@@ -154,7 +154,7 @@ class TinyCNN_Headless(nn.Module):
         self.conv1 = nn.Conv2d(3, 8, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1)
-        self.fc1 = nn.Linear(16 * 7 * 7, 32)
+        self.fc1 = nn.Linear(16 * 8 * 8, 32)
 
     def forward(self, x):
         # x = self.pool(torch.relu(self.conv1(x)))
@@ -190,7 +190,7 @@ class TinyCNN_Headless(nn.Module):
         layer_outputs.append(pool2_out)
         
         # Flatten
-        flattened = pool2_out.view(-1, 16 * 7 * 7)
+        flattened = pool2_out.view(-1, 16 * 8 * 8)
         layer_outputs.append(flattened)
         
         # Fully connected layer
@@ -297,3 +297,13 @@ class CustomUNET(nn.Module):
         d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
         
         return self.final(d1)
+
+class ProjNet(nn.Module):
+    def __init__(self, size):
+        super(ProjNet, self).__init__()
+        self.size = size
+        self.net = nn.Linear(self.size, self.size)
+
+    def forward(self, input):
+        out = self.net(input)
+        return out / (torch.sqrt(torch.sum((out) ** 2, dim=1, keepdim=True)) + 1e-20)

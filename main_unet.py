@@ -356,7 +356,7 @@ for epoch in range(num_unet_epochs):
 # Retrain classifier head
 unet_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
     in_channels=3, out_channels=3, init_features=32, pretrained=False)
-unet_model.load_state_dict(torch.load(f"models_unet/contrast_unet_model_ws.pt", weights_only=True))
+unet_model.load_state_dict(torch.load(f"models_unet/contrast_unet_model.pt", weights_only=True))
 unet_model.to(DEVICE)
 
 contrast_body = TinyCNN_Headless()
