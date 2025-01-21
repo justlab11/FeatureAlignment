@@ -7,7 +7,7 @@ import torch.optim as optim
 from losses import supervised_contrastive_loss, SlicedWasserstein
 
 
-def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True):
+def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True, unet_model=None):
     """
     Run one epoch of training or evaluation on the given dataset.
     
@@ -29,6 +29,10 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
         model.train()
     else:
         model.eval()
+
+    if unet_model:
+        unet_model.to(device)
+        unet_model.eval()
     
     running_loss = 0.0
     correct = 0
@@ -55,6 +59,10 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
                 correct += predicted.eq(labels).sum().item()
             
             else:
+                if unet_model:
+                    aux_samples = unet_model(aux_samples)
+                    aux_samples = nn.functional.interpolate(aux_samples, size=(28, 28), mode='bilinear', align_corners=False)
+                    
                 inputs = torch.cat((base_samples, aux_samples), 0)
 
                 outputs = model(inputs)[-1]
@@ -75,7 +83,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
     
     return epoch_loss, epoch_accuracy
 
-def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True, temperature=0.07):
+def contrastive_run(model, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.07, unet_model=None):
     """
     Run one epoch of contrastive learning training or evaluation.
     """
@@ -89,10 +97,18 @@ def contrastive_run(model, proj_head, optimizer, dataloader, device, train=True,
         proj_head.eval()
     
     running_loss = 0.0
+
+    if unet_model:
+        unet_model.to(device)
+        unet_model.eval()
     
     for base_samples, aux_samples, labels in dataloader:
         base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
         
+        if unet_model:
+            aux_samples = unet_model(aux_samples)
+            aux_samples = nn.functional.interpolate(aux_samples, size=(28, 28), mode='bilinear', align_corners=False)
+
         if train:
             optimizer.zero_grad()
         

@@ -236,21 +236,24 @@ if not os.path.exists("models_unet/contrast_class_plain+skips.pt"):
 # training the unet model
 contrast_body = TinyCNN_Headless()
 contrast_body.load_state_dict(torch.load(f"models_unet/contrast_body_plain+skips.pt", weights_only=True))
+contrast_body.to(DEVICE)
 contrast_body.eval()
 
 unet_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
     in_channels=3, out_channels=3, init_features=32, pretrained=False)
-
+unet_model.to(DEVICE)
 
 unet_optimizer = optim.Adam(
     unet_model.parameters(),
-    lr = 1e-3,
+    lr = 5e-4,
     weight_decay = 1e-5
 )
 
 num_epochs_warm_start = 5
-unet_val_loss = 1e7
+proj_head = torch.nn.Linear(32, 128)
+proj_head.to(DEVICE)
 
+# warm start
 for epoch in range(num_epochs_warm_start):
     train_loss = unet_run(
         unet_model=unet_model,
@@ -270,6 +273,154 @@ for epoch in range(num_epochs_warm_start):
         train=False
     )
 
+    classifier_val_loss = contrastive_run(
+        model=contrast_body,
+        proj_head=proj_head,
+        dataloader=val_loader,
+        device=DEVICE,
+        unet_model=unet_model,
+        train=False
+    )
+
     print(f"Epoch {epoch} Loss: {round(train_loss, 4)}, {round(val_loss, 4)}")
+    print(f"Epoch {epoch} Loss: {round(classifier_val_loss, 4)}\n")
 
+    torch.save(unet_model.state_dict(), "models_unet/contrast_unet_model_ws.pt")
 
+# full train
+unet_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    in_channels=3, out_channels=3, init_features=32, pretrained=False)
+unet_model.load_state_dict(torch.load(f"models_unet/contrast_unet_model_ws.pt", weights_only=True))
+unet_model.to(DEVICE)
+
+unet_optimizer = optim.Adam(
+    unet_model.parameters(),
+    lr = 5e-4,
+    weight_decay = 1e-5
+)
+
+contrast_body.train()
+contrast_optimizer = optim.Adam(
+    list(contrast_body.parameters()) + list(proj_head.parameters()),
+    lr=0.001, 
+    weight_decay=1e-5
+)
+
+num_unet_epochs = 20
+unet_val_loss = 1e7
+classifier_val_loss = 1e7
+
+for epoch in range(num_unet_epochs):
+    train_loss = unet_run(
+        unet_model=unet_model,
+        classifier=contrast_body,
+        optimizer=unet_optimizer,
+        dataloader=train_loader,
+        device=DEVICE,
+        train=True
+    )
+    
+    classifier_train_loss = contrastive_run(
+        model=contrast_body,
+        proj_head=proj_head,
+        dataloader=val_loader,
+        device=DEVICE,
+        unet_model=unet_model,
+        train=True
+    )
+
+    val_loss = unet_run(
+        unet_model=unet_model,
+        classifier=contrast_body,
+        optimizer=unet_optimizer,
+        dataloader=val_loader,
+        device=DEVICE,
+        train=False
+    )
+
+    classifier_val_loss = contrastive_run(
+        model=contrast_body,
+        proj_head=proj_head,
+        dataloader=val_loader,
+        device=DEVICE,
+        unet_model=unet_model,
+        train=False
+    )
+
+    print(f"Epoch {epoch} Loss: {round(train_loss, 4)}, {round(val_loss, 4)}")
+    print(f"Epoch {epoch} Loss: {round(classifier_train_loss, 4)}, {round(classifier_val_loss, 4)}\n")
+
+    torch.save(unet_model.state_dict(), "models_unet/contrast_unet_model.pt")
+    torch.save(contrast_body.state_dict(), "models_unet/contrast_body_retrain.pt")
+
+# Retrain classifier head
+unet_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    in_channels=3, out_channels=3, init_features=32, pretrained=False)
+unet_model.load_state_dict(torch.load(f"models_unet/contrast_unet_model_ws.pt", weights_only=True))
+unet_model.to(DEVICE)
+
+contrast_body = TinyCNN_Headless()
+contrast_body.load_state_dict(torch.load(f"models_unet/contrast_body_retrain.pt", weights_only=True))
+contrast_body.to(DEVICE)
+
+class_head = TinyCNN_Head()
+
+wrapped_model = WrapperModelTrainHead(
+    body = contrast_body,
+    head = class_head
+)
+wrapped_model.to(DEVICE)
+optimizer = optim.Adam(
+    wrapped_model.head.parameters(),
+    lr = 0.001,
+    weight_decay = 1e-5
+)
+
+contrast_early_stopper = EarlyStopper(
+    patience=5,
+    min_delta=0
+)
+
+num_class_epochs = 20
+contrast_best = {
+    "val_loss": 1000,
+    "val_acc": 0
+}
+
+for epoch in range(num_class_epochs):
+    train_loss, train_acc = classification_run(
+        model=wrapped_model,
+        optimizer=optimizer,
+        dataloader=train_loader,
+        mode="base_and_aux",
+        unet_model=unet_model,
+        device=DEVICE,
+    )
+
+    val_loss, val_acc = classification_run(
+        model=wrapped_model,
+        optimizer=optimizer,
+        dataloader=val_loader,
+        device=DEVICE,
+        mode="base_only",
+        unet_model=unet_model,
+        train=False
+    )
+
+    print(f"Epoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2))
+
+    if val_loss < contrast_best["val_loss"]:
+        contrast_best["val_loss"] = val_loss
+        contrast_best["val_acc"] = val_acc
+        torch.save(wrapped_model.state_dict(), "models/contrast_classifier_unet.pt")
+
+    if contrast_early_stopper(val_loss):
+        print("\n")
+        print("Best Val Loss:", contrast_best["val_loss"])
+        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
+        break
+
+    if (epoch+1 == num_class_epochs):
+        print("\n")
+        print("Best Val Loss:", contrast_best["val_loss"])
+        print("Best Val Acc:", round(contrast_best["val_acc"]*100, 2))
