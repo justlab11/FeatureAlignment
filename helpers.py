@@ -3,8 +3,10 @@ from torchvision import transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
+import numpy as np
 
-from losses import supervised_contrastive_loss, SlicedWasserstein
+from losses import supervised_contrastive_loss, SlicedWasserstein, DSW
+from models import ProjNet
 
 
 def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True, unet_model=None):
@@ -62,7 +64,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
                 if unet_model:
                     aux_samples = unet_model(aux_samples)
                     aux_samples = nn.functional.interpolate(aux_samples, size=(28, 28), mode='bilinear', align_corners=False)
-                    
+
                 inputs = torch.cat((base_samples, aux_samples), 0)
 
                 outputs = model(inputs)[-1]
@@ -215,6 +217,54 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
     epoch_loss = running_loss / len(dataloader)
 
     return epoch_loss
+
+def run_dswd(model, dataloader, layers, device, base_only=True, num_projections=256, embedding_norm=1.0):
+    dataloader.dataset.unique_sources = True
+    model.to(device)
+    model.eval()
+
+    if type(layers) == int:
+        layers = [i for i in range(layers+1)]
+
+    dswd_loss = np.zeros((len(dataloader), len(layers)))
+    
+    for i, (base, aux, _) in enumerate(dataloader):
+        base = base.to(device)
+        aux = aux.to(device)
+
+        if base_only:
+            dataset_1, dataset_2 = torch.split(base, base.size(0) // 2)
+        else:
+            dataset_1, dataset_2 = base, aux
+
+        dataset_1_outputs = model(dataset_1)[:layers[-1]]
+        dataset_2_outputs = model(dataset_2)[:layers[-1]]
+
+        for j, layer in enumerate(layers):
+            dataset_1_layer_flat = dataset_1_outputs[layer].view(dataset_1_outputs.size(0), -1)
+            dataset_2_layer_flat = dataset_2_outputs[layer].view(dataset_2_outputs.size(0), -1)
+    
+            projnet = ProjNet(size=dataset_1_layer_flat.size(1)).to(device)
+            op_projnet = optim.Adam(
+                projnet.parameters(),
+                lr=0.001, 
+                weight_decay=1e-5
+            )
+
+            dsw_loss = DSW(
+                encoder=None,
+                embedding_norm=embedding_norm,
+                num_projections=num_projections,
+                projnet=projnet,
+                op_projnet=op_projnet
+            )
+
+            dswd_loss[i, j] += dsw_loss(
+                dataset_1_layer_flat,
+                dataset_2_layer_flat
+            ) / dataset_1_layer_flat.size(0)
+
+    return dsw_loss
 
 
 class EarlyStopper:
