@@ -46,37 +46,48 @@ class PairedMNISTDataset(Dataset):
         self.aux_indices_by_class = self._group_indices_by_class(self.aux_labels)
 
         self.unique_sources = False
+        self.specific_class = None 
 
     def __len__(self):
+        if self.specific_class is not None:
+            return len(self.base_indices_by_class[self.specific_class])
         return len(self.base_images)
     
-    def _group_indices_by_class(self, labels):
-        indices_by_class = {i: [] for i in range(10)}
-
-        for idx, label in enumerate(labels):
-            indices_by_class[label.item()].append(idx)
-
-        return indices_by_class
-    
     def __getitem__(self, idx):
-        # TODO: add self.mode functionality
-        label = self.base_labels[idx].item()
+        if self.specific_class is not None:
+            base_idx = self.base_indices_by_class[self.specific_class][idx]
+            label = self.specific_class
+        else:
+            base_idx = idx
+            label = self.base_labels[base_idx].item()
+
         pair_selection = np.random.uniform()
-        if pair_selection < .5 or self.unique_sources: # if 0 <= pair_selection < .5:  combine base and auxiliary
-            base_sample = self.base_images[idx]
-            aux_idx = np.random.choice(self.aux_indices_by_class[label])
+        if pair_selection < .5 or self.unique_sources:
+            base_sample = self.base_images[base_idx]
+            if self.specific_class is not None:
+                aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
+            else:
+                aux_idx = np.random.choice(self.aux_indices_by_class[label])
             aux_sample = self.aux_images[aux_idx]
-        elif pair_selection < .75: # if .5 <= pair_selection < .75: combine base and base
-            base_sample = self.base_images[idx]
-            aux_idx = np.random.choice(self.base_indices_by_class[label])
+        elif pair_selection < .75:
+            base_sample = self.base_images[base_idx]
+            if self.specific_class is not None:
+                aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
+            else:
+                aux_idx = np.random.choice(self.base_indices_by_class[label])
             aux_sample = self.base_images[aux_idx]
-        else: # if .75 <= pair_selection <= 1: combine auxiliary and auxiliary
-            aux_idx = np.random.choice(self.aux_indices_by_class[label])
-            base_sample = self.aux_images[aux_idx]
-            aux_idx = np.random.choice(self.aux_indices_by_class[label])
-            aux_sample = self.aux_images[aux_idx]
+        else:
+            if self.specific_class is not None:
+                aux_idx1 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+                aux_idx2 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+            else:
+                aux_idx1 = np.random.choice(self.aux_indices_by_class[label])
+                aux_idx2 = np.random.choice(self.aux_indices_by_class[label])
+            base_sample = self.aux_images[aux_idx1]
+            aux_sample = self.aux_images[aux_idx2]
 
         return base_sample, aux_sample, label
+
 
 
 class DatasetGenerator:
@@ -145,8 +156,8 @@ class DatasetGenerator:
         return color_images, labels
     
     def _create_skip_subset(self, images, labels):
-        lines_on = 3
-        lines_off = 3
+        lines_on = 4
+        lines_off = 4
 
         if images.ndim == 3:
             images = np.stack([images] * 3, axis=1)  # Add channel dimension

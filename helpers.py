@@ -218,8 +218,9 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
 
     return epoch_loss
 
-def run_dswd(model, dataloader, layers, device, base_only=True, num_projections=256, embedding_norm=1.0):
+def run_dswd_classwise(model, dataloader, layers, device, base_only=True, class_choice=None, num_projections=256, embedding_norm=1.0):
     dataloader.dataset.unique_sources = True
+    dataloader.dataset.specific_class = class_choice
     model.to(device)
     model.eval()
 
@@ -235,14 +236,15 @@ def run_dswd(model, dataloader, layers, device, base_only=True, num_projections=
         if base_only:
             dataset_1, dataset_2 = torch.split(base, base.size(0) // 2)
         else:
-            dataset_1, dataset_2 = base, aux
+            dataset_1, _ = torch.split(base, base.size(0) // 2)
+            dataset_2, _ = torch.split(aux, aux.size(0) // 2)
 
-        dataset_1_outputs = model(dataset_1)[:layers[-1]]
-        dataset_2_outputs = model(dataset_2)[:layers[-1]]
+        dataset_1_outputs = model(dataset_1)[:layers[-1]+1]
+        dataset_2_outputs = model(dataset_2)[:layers[-1]+1]
 
         for j, layer in enumerate(layers):
-            dataset_1_layer_flat = dataset_1_outputs[layer].view(dataset_1_outputs.size(0), -1)
-            dataset_2_layer_flat = dataset_2_outputs[layer].view(dataset_2_outputs.size(0), -1)
+            dataset_1_layer_flat = dataset_1_outputs[layer].view(dataset_1_outputs[layer].size(0), -1)
+            dataset_2_layer_flat = dataset_2_outputs[layer].view(dataset_2_outputs[layer].size(0), -1)
     
             projnet = ProjNet(size=dataset_1_layer_flat.size(1)).to(device)
             op_projnet = optim.Adam(
@@ -266,6 +268,26 @@ def run_dswd(model, dataloader, layers, device, base_only=True, num_projections=
 
     return dsw_loss
 
+def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, num_projections=256, embedding_norm=1.0):
+    unique_classes = torch.unique(dataloader.dataset.base_labels, sorted=True).tolist()
+    class_hist = {str(i): 0 for i in unique_classes}
+    class_loss = {str(i): 0 for i in unique_classes}
+
+    for cls in unique_classes:
+        dataloader.dataset.specific_class = cls
+        class_hist[str(cls)] = len(dataloader)
+        loss = run_dswd_classwise(
+            model=model,
+            dataloader=dataloader,
+            layers=layers,
+            device=device,
+            base_only=base_only,
+            num_projections=num_projections,
+            embedding_norm=embedding_norm
+        )
+        class_loss[str(cls)] = loss
+
+    return class_loss, class_hist
 
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
