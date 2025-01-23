@@ -6,3 +6,4 @@ images
 __pycache__
 main_test.py
 models_unet
+unet_folder

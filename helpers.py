@@ -52,7 +52,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
             optimizer.zero_grad()
         
         with torch.set_grad_enabled(train):
-            if mode == 'base_only':
+            if mode == 'base_only' and unet_model == None:
                 outputs = model(base_samples)[-1]
                 loss = criterion(outputs, labels)
                 
@@ -61,9 +61,8 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
                 correct += predicted.eq(labels).sum().item()
             
             else:
-                if unet_model:
+                if unet_model != None:
                     aux_samples = unet_model(aux_samples)
-                    aux_samples = nn.functional.interpolate(aux_samples, size=(28, 28), mode='bilinear', align_corners=False)
 
                 inputs = torch.cat((base_samples, aux_samples), 0)
 
@@ -85,7 +84,7 @@ def classification_run(model, optimizer, dataloader, device, mode='base_only', t
     
     return epoch_loss, epoch_accuracy
 
-def contrastive_run(model, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.07, unet_model=None):
+def contrastive_run(model, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.1, unet_model=None):
     """
     Run one epoch of contrastive learning training or evaluation.
     """
@@ -107,10 +106,8 @@ def contrastive_run(model, proj_head, dataloader, device, optimizer=None, train=
     for base_samples, aux_samples, labels in dataloader:
         base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
         
-        if unet_model:
+        if unet_model!=None:
             aux_samples = unet_model(aux_samples)
-            aux_samples = nn.functional.interpolate(aux_samples, size=(28, 28), mode='bilinear', align_corners=False)
-
         if train:
             optimizer.zero_grad()
         
@@ -175,8 +172,6 @@ def old_unet_run(unet_model, classifier, optimizer, dataloader, device, train=Tr
     return epoch_loss
 
 def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
-    upscale_transform = transforms.Resize((32, 32))
-
     criterion = SlicedWasserstein(num_projections=256)
     unet_model.to(device)
     classifier.to(device)
@@ -191,18 +186,14 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
     running_loss = 0.0
 
     for base_samples, aux_samples, _ in dataloader: 
-        aux_samples = upscale_transform(aux_samples)
-
         base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
         if train:
             optimizer.zero_grad()
 
         with torch.set_grad_enabled(train):
             unet_output = unet_model(aux_samples)
-            unet_images = nn.functional.interpolate(unet_output, size=(28, 28), mode='bilinear', align_corners=False)
-
             base_reps = classifier(base_samples)
-            aux_reps = classifier(unet_images)
+            aux_reps = classifier(unet_output)
         
         loss = 0
         for i in range(len(base_reps)):
@@ -218,11 +209,15 @@ def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
 
     return epoch_loss
 
-def run_dswd_classwise(model, dataloader, layers, device, base_only=True, class_choice=None, num_projections=256, embedding_norm=1.0):
+def run_dswd_classwise(model, dataloader, layers, device, base_only=True, unet_model=None, class_choice=None, num_projections=128, embedding_norm=1.0):
     dataloader.dataset.unique_sources = True
     dataloader.dataset.specific_class = class_choice
     model.to(device)
     model.eval()
+
+    if unet_model != None:
+        unet_model.to(device)
+        unet_model.eval()
 
     if type(layers) == int:
         layers = [i for i in range(layers+1)]
@@ -230,15 +225,18 @@ def run_dswd_classwise(model, dataloader, layers, device, base_only=True, class_
     dswd_loss = np.zeros((len(dataloader), len(layers)))
     
     for i, (base, aux, _) in enumerate(dataloader):
-        base = base.to(device)
-        aux = aux.to(device)
-
         if base_only:
             dataset_1, dataset_2 = torch.split(base, base.size(0) // 2)
         else:
             dataset_1, _ = torch.split(base, base.size(0) // 2)
             dataset_2, _ = torch.split(aux, aux.size(0) // 2)
 
+        dataset_1 = dataset_1.to(device)
+        dataset_2 = dataset_2.to(device)
+
+        if unet_model and not base_only:
+            dataset_2 = unet_model(dataset_2)
+            
         dataset_1_outputs = model(dataset_1)[:layers[-1]+1]
         dataset_2_outputs = model(dataset_2)[:layers[-1]+1]
 
@@ -253,7 +251,7 @@ def run_dswd_classwise(model, dataloader, layers, device, base_only=True, class_
                 weight_decay=1e-5
             )
 
-            dsw_loss = DSW(
+            dsw = DSW(
                 encoder=None,
                 embedding_norm=embedding_norm,
                 num_projections=num_projections,
@@ -261,14 +259,14 @@ def run_dswd_classwise(model, dataloader, layers, device, base_only=True, class_
                 op_projnet=op_projnet
             )
 
-            dswd_loss[i, j] += dsw_loss(
+            dswd_loss[i, j] += dsw(
                 dataset_1_layer_flat,
                 dataset_2_layer_flat
             ) / dataset_1_layer_flat.size(0)
 
-    return dsw_loss
+    return dswd_loss
 
-def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, num_projections=256, embedding_norm=1.0):
+def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, unet_model=None, num_projections=128, embedding_norm=1.0):
     unique_classes = torch.unique(dataloader.dataset.base_labels, sorted=True).tolist()
     class_hist = {str(i): 0 for i in unique_classes}
     class_loss = {str(i): 0 for i in unique_classes}
@@ -276,6 +274,7 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, num_
     for cls in unique_classes:
         dataloader.dataset.specific_class = cls
         class_hist[str(cls)] = len(dataloader)
+        print(f"Class {cls} Size: {len(dataloader)*dataloader.batch_size} ({len(dataloader)} batches)")
         loss = run_dswd_classwise(
             model=model,
             dataloader=dataloader,
@@ -283,9 +282,11 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, num_
             device=device,
             base_only=base_only,
             num_projections=num_projections,
+            unet_model=unet_model,
             embedding_norm=embedding_norm
         )
         class_loss[str(cls)] = loss
+        print(f"Class {cls} Losses: {loss}\n")
 
     return class_loss, class_hist
 

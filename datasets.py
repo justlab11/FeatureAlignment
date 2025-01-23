@@ -30,11 +30,13 @@ class PairedMNISTDataset(Dataset):
         
         resized_base_images = np.zeros((len(base_images), 3, 32, 32))
         for i, img in enumerate(base_images):
-            resized_base_images[i] = cv2.resize(img, (32, 32), interpolation=cv2.INTER_LINEAR)
+            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
+            resized_base_images[i] = new_img.transpose(2,0,1)
 
         resized_aux_images = np.zeros((len(aux_images), 3, 32, 32))
         for i, img in enumerate(aux_images):
-            resized_aux_images[i] = cv2.resize(img, (32, 32), interpolation=cv2.INTER_LINEAR)
+            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
+            resized_aux_images[i] = new_img.transpose(2,0,1)
 
         self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
         self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
@@ -52,6 +54,14 @@ class PairedMNISTDataset(Dataset):
         if self.specific_class is not None:
             return len(self.base_indices_by_class[self.specific_class])
         return len(self.base_images)
+    
+    def _group_indices_by_class(self, labels):
+        indices_by_class = {i: [] for i in range(10)}
+
+        for idx, label in enumerate(labels):
+            indices_by_class[label.item()].append(idx)
+
+        return indices_by_class
     
     def __getitem__(self, idx):
         if self.specific_class is not None:

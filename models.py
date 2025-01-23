@@ -269,7 +269,7 @@ class CustomUNET(nn.Module):
         self.dec2 = self.conv_block(192, 64)
         self.dec1 = self.conv_block(96, 32)
         
-        self.final = nn.Conv2d(32, 32, kernel_size=1)
+        self.final = nn.Conv2d(32, 3, kernel_size=1)
         
         self.pool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
