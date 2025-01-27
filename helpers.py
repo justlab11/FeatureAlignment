@@ -286,7 +286,6 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, unet
             embedding_norm=embedding_norm
         )
         class_loss[str(cls)] = loss
-        print(f"Class {cls} Losses: {loss}\n")
 
     return class_loss, class_hist
 
