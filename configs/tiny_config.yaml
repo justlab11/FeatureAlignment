@@ -1,7 +1,7 @@
 dataset:
   name: "mnist"
-  base_ds: "none"
-  aux_ds: "skip"
+  base_ds: "skip"
+  aux_ds: "none"
   rng_seed: 72
   batch_size: 64
   base_sample_ratio: .2 # .2 means 20% of all train samples go to base
@@ -18,6 +18,7 @@ classifier:
   stride: [1, 1]
   padding: [1, 1]
   mlp_layer_sizes: [32]
+  num_classes: 10
 
 unet:
   loss: "ebsw"

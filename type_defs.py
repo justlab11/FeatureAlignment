@@ -21,6 +21,7 @@ class ClassifierConfig(BaseModel):
     stride: List[int] = [1, 1]
     padding: List[int] = [1, 1]
     mlp_layer_sizes: List[int] = [32]
+    num_classes: int = 10
 
 class UNetConfig(BaseModel):
     loss: str = "ebsw"

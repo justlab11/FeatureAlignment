@@ -256,7 +256,7 @@ class WrapperModelTrainHead(nn.Module):
         with torch.no_grad():
             embed = self.body(x)
 
-        head = self.head(embed[-1])
+        head = [self.head(embed[-1])]
 
         return embed + head
     
