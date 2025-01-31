@@ -15,6 +15,7 @@ class SaveLocationsConfig(BaseModel):
     image_folder: str = "images"
 
 class ClassifierConfig(BaseModel):
+    identifier: str
     num_filters: List[int] = [8, 16]
     kernel_size: List[int] = [3, 3]
     stride: List[int] = [1, 1]

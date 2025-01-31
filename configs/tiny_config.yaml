@@ -12,6 +12,7 @@ save_locations:
   image_folder: "images"
 
 classifier:
+  identifier: "tiny" # unique identifier for the set of models
   num_filters: [8, 16]
   kernel_size: [3, 3]
   stride: [1, 1]

@@ -98,8 +98,6 @@ class PairedMNISTDataset(Dataset):
 
         return base_sample, aux_sample, label
 
-
-
 class DatasetGenerator:
     def __init__(self, images, labels, subset_ratio=.3, base_ds="red", aux_ds="color", train=True):
         self.base_ds = base_ds
