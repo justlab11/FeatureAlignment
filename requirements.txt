@@ -4,3 +4,5 @@ numpy
 scikit-learn
 matplotlib
 pickle5
+pydantic
+PyYAML

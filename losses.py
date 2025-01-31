@@ -167,3 +167,26 @@ class DSW(torch.nn.Module):
             data_fake.view(data.shape[0], -1)
         )
         return _dswd
+
+def one_dimensional_Wasserstein_prod(X,Y,theta,p):
+    X_prod = torch.matmul(X, theta.transpose(0, 1))
+    Y_prod = torch.matmul(Y, theta.transpose(0, 1))
+    X_prod = X_prod.view(X_prod.shape[0], -1)
+    Y_prod = Y_prod.view(Y_prod.shape[0], -1)
+    wasserstein_distance = torch.abs(
+        (
+                torch.sort(X_prod, dim=0)[0]
+                - torch.sort(Y_prod, dim=0)[0]
+        )
+    )
+    wasserstein_distance = torch.sum(torch.pow(wasserstein_distance, p), dim=0,keepdim=True)
+    return wasserstein_distance
+
+def ISEBSW(X, Y, L=10, p=2, device="cpu"):
+    dim = X.size(1)
+    theta = rand_projections(dim, L, device)
+    wasserstein_distances = one_dimensional_Wasserstein_prod(X,Y,theta,p=p)
+    wasserstein_distances =  wasserstein_distances.view(1,L)
+    weights = torch.softmax(wasserstein_distances,dim=1)
+    sw = torch.sum(weights*wasserstein_distances,dim=1).mean()
+    return  torch.pow(sw,1./p)

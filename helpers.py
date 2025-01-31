@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np
+import yaml
 
 from losses import supervised_contrastive_loss, SlicedWasserstein, DSW
 from models import ProjNet
@@ -316,3 +317,8 @@ class EarlyStopper:
             self.counter = 0
 
         return self.early_stop
+
+def load_yaml(file_path):
+    with open(file_path, "r") as file:
+        data = yaml.safe_load(file)
+    return data
