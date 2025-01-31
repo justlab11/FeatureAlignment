@@ -2,6 +2,119 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18
 
+class DynamicCNN(nn.Module):
+    def __init__(self, input_shape:tuple, num_filters:list=[32, 32], kernel_size:list=[3], stride:list=[1], padding:list=[1],
+                 mlp_layer_sizes:list=[128, 64], num_classes:int=10, headless:bool=False):
+        super(DynamicCNN, self).__init__()
+
+        self.input_shape = input_shape
+        self.headless = headless
+        
+        # Determine the number of convolutional layers based on the longest list
+        self.num_conv_layers = max(len(num_filters), len(kernel_size), len(stride), len(padding))
+        
+        # Adjust lists to be the same length
+        self.num_filters = num_filters + [num_filters[-1]] * (self.num_conv_layers - len(num_filters))
+        self.kernel_size = kernel_size + [kernel_size[-1]] * (self.num_conv_layers - len(kernel_size))
+        self.stride = stride + [stride[-1]] * (self.num_conv_layers - len(stride))
+        self.padding = padding + [padding[-1]] * (self.num_conv_layers - len(padding))
+        
+        # Ensure all parameters are positive integers
+        for param_list in [self.num_filters, self.kernel_size, self.stride, self.padding]:
+            for param in param_list:
+                assert isinstance(param, int) and param > 0, "All parameters must be positive integers"
+        
+        # Ensure all MLP layer sizes are positive integers
+        for size in mlp_layer_sizes:
+            assert isinstance(size, int) and size > 0, "All MLP layer sizes must be positive integers"
+
+        self.conv_layers = nn.ModuleList()
+
+        # Assuming input shape is (batch_size, channels, height, width)
+        in_channels = input_shape[1]
+        height = input_shape[2]
+        width = input_shape[3]
+        
+        for i in range(self.num_conv_layers):
+            if i == 0:
+                layer = nn.Sequential(
+                    nn.Conv2d(in_channels, self.num_filters[i], kernel_size=self.kernel_size[i], stride=self.stride[i], padding=self.padding[i]),
+                    nn.ReLU(),
+                    nn.MaxPool2d(kernel_size=2)
+                )
+            else:
+                layer = nn.Sequential(
+                    nn.Conv2d(self.num_filters[i-1], self.num_filters[i], kernel_size=self.kernel_size[i], stride=self.stride[i], padding=self.padding[i]),
+                    nn.ReLU(),
+                    nn.MaxPool2d(kernel_size=2)
+                )
+            
+            self.conv_layers.append(layer)
+            
+            # Update dimensions after each layer
+            height = (height + 2 * self.padding[i] - self.kernel_size[i]) // self.stride[i] + 1
+            height = height // 2  # MaxPool2d
+            width = (width + 2 * self.padding[i] - self.kernel_size[i]) // self.stride[i] + 1
+            width = width // 2  # MaxPool2d
+        
+        # Store the final output shape before flattening
+        self.output_shape = (self.num_filters[-1], height, width)
+
+        self.mlp_layers = nn.ModuleList()
+        
+        # Initialize MLP layers
+        for i in range(len(mlp_layer_sizes)):
+            if i == 0:
+                layer = nn.Linear(self.output_shape[0] * self.output_shape[1] * self.output_shape[2], mlp_layer_sizes[i])
+            else:
+                layer = nn.Linear(mlp_layer_sizes[i-1], mlp_layer_sizes[i])
+            self.mlp_layers.append(layer)
+        
+        # Output layer
+        self.output_layer = nn.Linear(mlp_layer_sizes[-1], num_classes)
+        self.num_classes = num_classes
+
+    def forward(self, x):
+        layer_outputs = []
+        
+        for i, layer in enumerate(self.conv_layers):
+            # Conv layer
+            conv_out = layer[0](x)
+            layer_outputs.append(conv_out)
+            
+            # ReLU layer
+            relu_out = layer[1](conv_out)
+            layer_outputs.append(relu_out)
+            
+            # MaxPool layer
+            pool_out = layer[2](relu_out)
+            layer_outputs.append(pool_out)
+            
+            x = pool_out
+        
+        # Flatten
+        flattened = pool_out.view(-1, self.output_shape[0] * self.output_shape[1] * self.output_shape[2])
+        layer_outputs.append(flattened)
+        
+        for i, mlp_layer in enumerate(self.mlp_layers):
+            mlp_out = mlp_layer(flattened)
+            layer_outputs.append(mlp_out)
+            flattened = mlp_out  # Update for next layer
+            
+            if i < len(self.mlp_layers) - 1:
+                # Apply ReLU activation for hidden layers
+                relu_out = torch.relu(mlp_out)
+                layer_outputs.append(relu_out)
+                flattened = relu_out
+        
+        # Output layer
+        if not self.headless:
+            output = self.output_layer(flattened)
+            layer_outputs.append(output)
+        
+        return layer_outputs
+
+
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
