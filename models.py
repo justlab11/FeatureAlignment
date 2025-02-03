@@ -4,6 +4,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+## TODO: make sure this can work for resnet or any other model
+
 class DynamicCNN(nn.Module):
     def __init__(self, input_shape:tuple, num_filters:list=[32, 32], kernel_size:list=[3], stride:list=[1], padding:list=[1],
                  mlp_layer_sizes:list=[128, 64], num_classes:int=10):
@@ -102,6 +104,9 @@ class DynamicCNN(nn.Module):
         if freeze and self.freeze_head:
             logger.error("Cannot freeze both head and body simultaneously.")
             raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def get_body_output_size(self):
+        return self.mlp_layers[-1].out_features
 
     def forward(self, x):
         layer_outputs = []
