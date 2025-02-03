@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Union
+from torch.utils.data import DataLoader
 
 class DatasetConfig(BaseModel):
     name: str = "mnist"
@@ -13,6 +14,7 @@ class SaveLocationsConfig(BaseModel):
     model_folder: str = "models"
     file_folder: str = "files"
     image_folder: str = "images"
+    logs_folder: str = "logs"
 
 class ClassifierConfig(BaseModel):
     identifier: str
@@ -31,3 +33,12 @@ class Config(BaseModel):
     save_locations: SaveLocationsConfig
     classifier: ClassifierConfig
     unet: UNetConfig
+    verbose: bool = True
+
+class DataLoaderSet(BaseModel):
+    train_loader: DataLoader
+    test_loader: DataLoader
+    val_loader: DataLoader
+
+    class Config:
+        arbitrary_types_allowed = True

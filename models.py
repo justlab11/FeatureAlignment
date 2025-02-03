@@ -1,13 +1,26 @@
 import torch
 import torch.nn as nn
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DynamicCNN(nn.Module):
     def __init__(self, input_shape:tuple, num_filters:list=[32, 32], kernel_size:list=[3], stride:list=[1], padding:list=[1],
-                 mlp_layer_sizes:list=[128, 64], num_classes:int=10, headless:bool=False):
+                 mlp_layer_sizes:list=[128, 64], num_classes:int=10):
         super(DynamicCNN, self).__init__()
 
+        logger.debug(f"""
+            Building model with parameters:
+            \n\tInput Size: {input_shape}
+            \n\tFilters: {num_filters}
+            \n\tKernels: {kernel_size}
+            \n\tMLP Layers: {mlp_layer_sizes}
+            \n\tOutput Classes: {num_classes}
+        """)
+
         self.input_shape = input_shape
-        self.headless = headless
+        self.freeze_head = False
+        self.freeze_body = False
         
         # Determine the number of convolutional layers based on the longest list
         self.num_conv_layers = max(len(num_filters), len(kernel_size), len(stride), len(padding))
@@ -73,42 +86,58 @@ class DynamicCNN(nn.Module):
         self.output_layer = nn.Linear(mlp_layer_sizes[-1], num_classes)
         self.num_classes = num_classes
 
+    def set_freeze_head(self, freeze: bool):
+        self.freeze_head = freeze
+        for param in self.output_layer.parameters():
+            param.requires_grad = not freeze
+        if freeze and self.freeze_body:
+            logger.error("Cannot freeze both head and body simultaneously.")
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def set_freeze_body(self, freeze: bool):
+        self.freeze_body = freeze
+        for layer in self.conv_layers + self.mlp_layers:
+            for param in layer.parameters():
+                param.requires_grad = not freeze
+        if freeze and self.freeze_head:
+            logger.error("Cannot freeze both head and body simultaneously.")
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
     def forward(self, x):
         layer_outputs = []
         
         for i, layer in enumerate(self.conv_layers):
             # Conv layer
-            conv_out = layer[0](x)
-            layer_outputs.append(conv_out)
+            x = layer[0](x)
+            layer_outputs.append(x)
             
             # ReLU layer
-            relu_out = layer[1](conv_out)
-            layer_outputs.append(relu_out)
+            x = layer[1](x)
+            layer_outputs.append(x)
             
             # MaxPool layer
-            pool_out = layer[2](relu_out)
-            layer_outputs.append(pool_out)
-            
-            x = pool_out
+            x = layer[2](x)
+            layer_outputs.append(x)
         
         # Flatten
-        flattened = pool_out.view(-1, self.output_shape[0] * self.output_shape[1] * self.output_shape[2])
-        layer_outputs.append(flattened)
+        x = x.view(-1, self.output_shape[0] * self.output_shape[1] * self.output_shape[2])
+        layer_outputs.append(x)
         
         for i, mlp_layer in enumerate(self.mlp_layers):
-            mlp_out = mlp_layer(flattened)
-            layer_outputs.append(mlp_out)
-            flattened = mlp_out  # Update for next layer
+            x = mlp_layer(x)
+            layer_outputs.append(x)
             
             if i < len(self.mlp_layers) - 1:
                 # Apply ReLU activation for hidden layers
-                relu_out = torch.relu(mlp_out)
-                layer_outputs.append(relu_out)
-                flattened = relu_out
+                x = torch.relu(x)
+                layer_outputs.append(x)
+
+        if self.freeze_body:
+            layer_outputs = [x.detach()]  # Only keep the final MLP output, detached
         
         # Output layer
-        if not self.headless:
-            output = self.output_layer(flattened)
+        if not self.freeze_head:
+            output = self.output_layer(x)
             layer_outputs.append(output)
         
         return layer_outputs
