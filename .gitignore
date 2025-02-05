@@ -1,5 +1,6 @@
 venv
 test.ipynb
+test.py
 data
 models
 images
@@ -8,3 +9,4 @@ main_test.py
 models_unet
 unet_folder
 unet_work_copy.ipynb
+logs

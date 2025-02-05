@@ -7,7 +7,7 @@ import logging
 
 from models import DynamicCNN
 from helpers import EarlyStopper
-from losses import supervised_contrastive_loss
+from losses import supervised_contrastive_loss, ISEBSW
 from type_defs import DataLoaderSet
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ class Trainer:
         self.unet = unet
         if unet_load_path:
             self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
+
 
     def classification_train_loop(self, filename, device, mode, num_epochs=50):
         optimizer = optim.Adam(
@@ -74,25 +75,130 @@ class Trainer:
                 train = False
             )
 
-            logger.info(f"\n\tEpoch {epoch+1}:", round(train_loss, 4), round(train_acc*100, 2), round(val_loss, 4), round(val_acc*100, 2), end="")
+            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {train_acc*100:.2f} {val_loss:.4f} {val_acc*100:.2f}"
 
             if val_loss < best_val:
-                logger.info(" <- New Best", end="")
+                log_message += " <- New Best"
                 best_val = val_loss
                 torch.save(self.classifier.state_dict(), filename)
 
+            logger.info(log_message)
+
             if early_stopper(val_loss):
-                logger.info("\n\t-- Stopped -- ")
+                logger.info("\tSTOPPED")
                 break
+
+    def evaluate_model(self, device):
+        _, val_acc = self._classification_run(
+            self.classifier,
+            optimizer=None,
+            dataloader=self.val_loader,
+            device=device,
+            mode="base_only",
+            train=False,
+        )
+
+        return val_acc
+    
+    def unet_train_loop(self, filename, device, num_epochs=20):
+        optimizer = optim.Adam(
+            self.unet.parameters(),
+            lr = 3e-4,
+            weight_decay = 1e-5
+        )
+        early_stopper = EarlyStopper(patience=7)
+        unet_val_loss = 1e7
+
+        for epoch in range(num_epochs):
+            train_loss = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+
+            val_loss = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=optimizer,
+                dataloader=self.val_loader,
+                device=device,
+                train=False
+            )
+
+            _, classifier_val_acc = self._classification_run(
+                model=self.classifier,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                train=False,
+                unet_model=self.unet
+            )
+
+            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {val_loss:.4f}"
+
+            if val_loss < unet_val_loss:
+                log_message += " <- New Best"
+                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
+                unet_val_loss = val_loss
+                torch.save(self.unet.state_dict(), filename)
+
+            logger.info(log_message)
+
+            if early_stopper(val_loss):
+                logger.info("\tSTOPPED")
+                break
+
+    
+    def _unet_run(self, unet_model, classifier, optimizer, dataloader, device, train=True):
+        criterion = ISEBSW
+        unet_model.to(device)
+        classifier.to(device)
+
+        if train:
+            unet_model.train()
+        else:
+            unet_model.eval()
+
+        classifier.eval()
+
+        running_loss = 0.0
+
+        for base_samples, aux_samples, _ in dataloader: 
+            base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+            if train:
+                optimizer.zero_grad()
+
+            with torch.set_grad_enabled(train):
+                unet_output = unet_model(aux_samples)
+                base_reps = classifier(base_samples)
+                aux_reps = classifier(unet_output)
+            
+            loss = 0
+            for i in range(len(base_reps)):
+                loss += criterion(base_reps[i], aux_reps[i], L=256, device=device)
+
+            if train:
+                loss.backward()
+                optimizer.step()
+
+            running_loss += loss.item()
+
+        epoch_loss = running_loss / len(dataloader)
+
+        return epoch_loss
+
 
     def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=200):
         # Step 1: Optimize temperature and train body
-        best_temp, best_val_loss = self.optimize_temperature(temp_range, num_epochs, device, filename)
+        best_temp, best_val_loss = self._optimize_temperature(temp_range, num_epochs, device, filename)
         
-        logger.info(f"Best temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
+        logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
         
         # Load the best model
-        self.classifier.load_state_dict(torch.load(filename))
+        self.classifier.load_state_dict(torch.load(filename, weights_only=True))
         
         # Step 2: Freeze body and train head
         self.classifier.set_freeze_head(False)
@@ -100,7 +206,7 @@ class Trainer:
         
         # Train the head
         head_filename = filename.replace('body', 'full')
-        self.classification_train_loop(head_filename, device, mode='base_only', num_epochs=50)
+        self.classification_train_loop(head_filename, device, mode='mixed', num_epochs=50)
         
         # Optionally, unfreeze everything for potential fine-tuning
         self.classifier.set_freeze_head(False)
@@ -190,9 +296,9 @@ class Trainer:
         best_val_loss = float('inf')
         
         for temp in temp_range:
-            logger.info(f"Starting temp: {temp}")
+            logger.info(f"\tStarting temp: {temp}")
             self.classifier.reset_parameters()
-            self.proj_head.reset_parameters()
+            self.reset_parameters(self.proj_head)
             
             optimizer = optim.Adam(
                 list(self.classifier.parameters()) + list(self.proj_head.parameters()),
@@ -232,14 +338,16 @@ class Trainer:
         return best_temp, best_val_loss
 
 
-    def _contrastive_run(model: DynamicCNN, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.1, unet_model=None):
+    def _contrastive_run(self, model: DynamicCNN, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.1, unet_model=None):
         """
         Run one epoch of contrastive learning training or evaluation.
         """
         criterion = supervised_contrastive_loss
         model.set_freeze_head(True)
         model.set_freeze_body(False)
-        
+        model.to(device)
+        proj_head.to(device)
+
         if train:
             model.train()
             proj_head.train()
@@ -276,4 +384,10 @@ class Trainer:
         epoch_loss = running_loss / len(dataloader)
         
         return epoch_loss
+
+    def reset_parameters(self, model):
+        for layer in model.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+
 

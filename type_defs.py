@@ -1,6 +1,8 @@
 from pydantic import BaseModel
-from typing import List, Union
+from typing import List, Any
 from torch.utils.data import DataLoader
+import numpy as np
+import torch.nn as nn
 
 class DatasetConfig(BaseModel):
     name: str = "mnist"
@@ -42,3 +44,16 @@ class DataLoaderSet(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+class EmbeddingSet(BaseModel):
+    base_embeds: np.ndarray
+    aux_embeds: np.ndarray
+    labels: np.ndarray
+
+    class Config:
+        arbitrary_types_allowed = True
+
+class ModelSet(BaseModel):
+    base: Any
+    mixed: Any
+    contrast: Any

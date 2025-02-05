@@ -78,8 +78,8 @@ class SlicedWasserstein(torch.nn.Module):
         w_dist = torch.mean(torch.abs(x_proj_sort - y_proj_sort))
         return w_dist
 
-def rand_projections(dim, num_projections=1000):
-    projections = torch.randn((num_projections, dim))
+def rand_projections(dim, num_projections=1000,device='cpu'):
+    projections = torch.randn((num_projections, dim),device=device)
     projections = projections / torch.sqrt(torch.sum(projections ** 2, dim=1, keepdim=True))
     return projections
 

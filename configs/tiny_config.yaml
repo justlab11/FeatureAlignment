@@ -4,12 +4,13 @@ dataset:
   aux_ds: "none"
   rng_seed: 72
   batch_size: 64
-  base_sample_ratio: .2 # .2 means 20% of all train samples go to base
+  base_sample_ratio: .1 # .2 means 20% of all train samples go to base
 
 save_locations:
   model_folder: "models"
   file_folder: "files"
   image_folder: "images"
+  logs_folder : "logs"
 
 classifier:
   identifier: "tiny" # unique identifier for the set of models
@@ -22,3 +23,5 @@ classifier:
 
 unet:
   loss: "ebsw"
+
+verbose: true
