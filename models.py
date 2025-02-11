@@ -255,6 +255,8 @@ class DynamicResNet(nn.Module):
         self.freeze_head = False
         self.freeze_body = False
 
+        self.body_output_size = self.model.fc.in_features
+
     def set_freeze_head(self, freeze: bool):
         self.freeze_head = freeze
         for param in self.model.fc.parameters():
@@ -271,6 +273,9 @@ class DynamicResNet(nn.Module):
         if freeze and self.freeze_head:
             logger.error("Cannot freeze both head and body simultaneously.")
             raise ValueError("Cannot freeze both head and body simultaneously.")
+        
+    def get_body_output_size(self):
+        return self.body_output_size
 
     def forward(self, x):
         layer_outputs = []

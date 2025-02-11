@@ -70,9 +70,9 @@ combined_dataset = CombinedDataset(
     aux_dataset=aux_full_dataset
 )
 
-train_size = int(.8 * len(combined_dataset))
-test_size = int(.1 * len(combined_dataset))
-val_size = len(combined_dataset) - train_size - test_size
+train_size = int(.1 * len(combined_dataset))
+val_size = int(.1 * len(combined_dataset))
+test_size = len(combined_dataset) - train_size - val_size
 
 train_ds, test_ds, val_ds = torch.utils.data.random_split(
     combined_dataset,
