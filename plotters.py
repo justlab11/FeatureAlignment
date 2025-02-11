@@ -53,41 +53,41 @@ class TSNE_Plotter:
 
         return model_embeds
     
-    def plot_tsne(self, classifiers: ModelSet, accuracies: ModelSet, device,
+    def plot_tsne(self, models: ModelSet, accuracies: ModelSet, device,
                   filename, base, aux, unet_models: None|ModelSet=None):
         
         if unet_models:
             base_embeds = self._get_embeds(
-                model=classifiers.base,
+                model=models.base,
                 unet_model=unet_models.base,
                 device=device,
             )
 
             mixed_embeds = self._get_embeds(
-                model=classifiers.mixed,
+                model=models.mixed,
                 unet_model=unet_models.mixed,
                 device=device,
             )
 
             contrast_embeds = self._get_embeds(
-                model=classifiers.contrast,
+                model=models.contrast,
                 unet_model=unet_models.contrast,
                 device=device,
             )
 
         else:
             base_embeds = self._get_embeds(
-                model=classifiers.base,
+                model=models.base,
                 device=device,
             )
 
             mixed_embeds = self._get_embeds(
-                model=classifiers.mixed,
+                model=models.mixed,
                 device=device,
             )
 
             contrast_embeds = self._get_embeds(
-                model=classifiers.contrast,
+                model=models.contrast,
                 device=device,
             )
 

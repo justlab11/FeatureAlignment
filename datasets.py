@@ -7,6 +7,120 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split as tts
+import pillow_heif
+from torchvision import transforms
+import glob
+from PIL import Image
+import os
+
+# Register HEIC opener
+pillow_heif.register_heif_opener()
+
+class HEIFFolder(Dataset):
+    def __init__(self, root, transform=None):
+        self.root = root
+        self.transform = transform
+        self.samples = []
+        self.class_samples = {}
+        
+        # Find all HEIC files recursively
+        for file_path in glob.glob(os.path.join(root, "**/*.heif"), recursive=True):
+            # Extract class from directory path
+            class_name = os.path.basename(os.path.dirname(file_path))
+            
+            # Add sample to list
+            self.samples.append((file_path, class_name))
+            
+            # Add to class_samples dictionary
+            if class_name not in self.class_samples:
+                self.class_samples[class_name] = []
+            self.class_samples[class_name].append(len(self.samples) - 1)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        image_path, label = self.samples[index]
+        
+        # Load HEIC image
+        image = Image.open(image_path)
+        
+        # Apply transform if provided
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        return image, label
+
+    def get_class_samples(self):
+        return self.class_samples
+    
+class CombinedDataset(Dataset):
+    def __init__(self, base_dataset, aux_dataset, unique_sources=False):
+        self.base_dataset = base_dataset
+        self.aux_dataset = aux_dataset
+        self.unique_sources = unique_sources
+        
+        # Get class samples from both datasets
+        self.base_class_samples = base_dataset.class_samples
+        self.aux_class_samples = aux_dataset.class_samples
+        
+        # Store file paths for base and aux datasets
+        self.base_file_paths = [self.base_dataset.samples[i][0] for i in range(len(self.base_dataset))]
+        self.aux_file_paths = [self.aux_dataset.samples[i][0] for i in range(len(self.aux_dataset))]
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, index):
+        base_file_path = self.base_file_paths[index]
+        base_image = Image.open(base_file_path)
+        
+        # Apply transform if provided
+        if self.base_dataset.transform is not None:
+            base_image = self.base_dataset.transform(base_image)
+        
+        label = self.base_dataset.samples[index][1]
+        
+        pair_selection = np.random.uniform()
+        
+        if self.unique_sources or pair_selection < 0.5:
+            # Ensure base and aux are from different sources
+            aux_idx = np.random.choice(self.aux_class_samples[label])
+            aux_file_path = self.aux_file_paths[aux_idx]
+            aux_image = Image.open(aux_file_path)
+            
+            # Apply transform if provided
+            if self.aux_dataset.transform is not None:
+                aux_image = self.aux_dataset.transform(aux_image)
+        elif pair_selection < 0.75:
+            # Base/Base pair
+            base_idx = np.random.choice(self.base_class_samples[label])
+            aux_file_path = self.base_file_paths[base_idx]
+            aux_image = Image.open(aux_file_path)
+            
+            # Apply transform if provided
+            if self.base_dataset.transform is not None:
+                aux_image = self.base_dataset.transform(aux_image)
+        else:
+            # Aux/Aux pair
+            aux_idx1 = np.random.choice(self.aux_class_samples[label])
+            aux_idx2 = np.random.choice(self.aux_class_samples[label])
+            base_file_path = self.aux_file_paths[aux_idx1]
+            aux_file_path = self.aux_file_paths[aux_idx2]
+            base_image = Image.open(base_file_path)
+            
+            # Apply transform if provided
+            if self.aux_dataset.transform is not None:
+                base_image = self.aux_dataset.transform(base_image)
+            aux_image = Image.open(aux_file_path)
+            
+            # Apply transform if provided
+            if self.aux_dataset.transform is not None:
+                aux_image = self.aux_dataset.transform(aux_image)
+        
+        label = float(label)
+
+        return base_image, aux_image, label
 
 class PairedMNISTDataset(Dataset):
     """
@@ -25,24 +139,34 @@ class PairedMNISTDataset(Dataset):
             base_images: np.ndarray, 
             base_labels: np.ndarray, 
             aux_images: np.ndarray, 
-            aux_labels: np.ndarray
+            aux_labels: np.ndarray,
+            img_size: int,
+            in_memory: bool = False,
         ):
         
-        resized_base_images = np.zeros((len(base_images), 3, 32, 32))
-        for i, img in enumerate(base_images):
-            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
-            resized_base_images[i] = new_img.transpose(2,0,1)
+        if in_memory:
+            resized_base_images = np.zeros((len(base_images), 3, img_size, img_size))
+            for i, img in enumerate(base_images):
+                new_img = cv2.resize(img.transpose(1,2,0), (img_size,img_size), interpolation=cv2.INTER_LINEAR)
+                resized_base_images[i] = new_img.transpose(2,0,1)
 
-        resized_aux_images = np.zeros((len(aux_images), 3, 32, 32))
-        for i, img in enumerate(aux_images):
-            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
-            resized_aux_images[i] = new_img.transpose(2,0,1)
+            resized_aux_images = np.zeros((len(aux_images), 3, img_size, img_size))
+            for i, img in enumerate(aux_images):
+                new_img = cv2.resize(img.transpose(1,2,0), (img_size,img_size), interpolation=cv2.INTER_LINEAR)
+                resized_aux_images[i] = new_img.transpose(2,0,1)
 
-        self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
-        self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
+            self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
+            self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
 
-        self.aux_images: torch.tensor = torch.from_numpy(resized_aux_images).float() / 255.0
-        self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
+            self.aux_images: torch.tensor = torch.from_numpy(resized_aux_images).float() / 255.0
+            self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
+        
+        else:
+            self.base_images: torch.tensor = torch.from_numpy(base_images).float() / 255.0
+            self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
+
+            self.aux_images: torch.tensor = torch.from_numpy(aux_images).float() / 255.0
+            self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
 
         self.base_indices_by_class = self._group_indices_by_class(self.base_labels)
         self.aux_indices_by_class = self._group_indices_by_class(self.aux_labels)

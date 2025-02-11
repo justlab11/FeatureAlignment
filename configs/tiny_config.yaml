@@ -1,9 +1,12 @@
 dataset:
-  name: "mnist"
-  base_ds: "skip"
-  aux_ds: "none"
+  base_name: "none"
+  base_folder: "data/mnist_v2"
+
+  aux_name: "texture"
+  aux_folder: "data/texture_mnist"
+
   rng_seed: 72
-  batch_size: 64
+  batch_size: 16
   base_sample_ratio: .1 # .2 means 20% of all train samples go to base
 
 save_locations:
@@ -13,15 +16,13 @@ save_locations:
   logs_folder : "logs"
 
 classifier:
-  identifier: "tiny" # unique identifier for the set of models
-  num_filters: [8, 16]
-  kernel_size: [3, 3]
-  stride: [1, 1]
-  padding: [1, 1]
-  mlp_layer_sizes: [32]
-  num_classes: 10
+  model: "resnet18"
+  identifier: "MNIST+TexMNIST" # unique identifier for the set of models
+  num_epochs: 50
+
 
 unet:
   loss: "ebsw"
+  num_epochs: 50
 
 verbose: true

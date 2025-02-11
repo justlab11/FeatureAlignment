@@ -90,7 +90,8 @@ class Trainer:
 
     def evaluate_model(self, device):
         _, val_acc = self._classification_run(
-            self.classifier,
+            model=self.classifier,
+            unet_model=self.unet,
             optimizer=None,
             dataloader=self.val_loader,
             device=device,
@@ -151,6 +152,140 @@ class Trainer:
                 logger.info("\tSTOPPED")
                 break
 
+    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, num_epochs=100):
+        unet_optimizer = optim.Adam(
+            self.unet.parameters(),
+            lr = 3e-4,
+            weight_decay = 1e-5
+        )
+
+        classifier_optimizer = optim.Adam(
+            self.classifier.parameters(),
+            lr = 3e-4,
+            weight_decay = 1e-5
+        )
+
+        early_stopper = EarlyStopper(patience=7)
+        best_val_loss = 1e7
+
+        for epoch in range(num_epochs):
+            # train unet once
+            _ = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+
+            # train classifier once
+            _, _ = self._classification_run(
+                model = self.classifier,
+                unet_model = self.unet,
+                optimizer = classifier_optimizer,
+                dataloader = self.train_loader,
+                mode = mode,
+                device = device,
+                train=True
+            )
+
+            classifier_val_loss, classifier_val_acc = self._classification_run(
+                model=self.classifier,
+                unet_model=self.unet,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                mode="base_only",
+                train=False,
+            )
+
+            log_message = f"\tEpoch {epoch+1}: {classifier_val_loss:.4f} {classifier_val_acc*100:.2f}"
+
+            if classifier_val_loss < best_val_loss:
+                log_message += " <- New Best"
+                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
+                best_val_loss = classifier_val_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
+                torch.save(self.unet.state_dict(), unet_filename)
+
+            logger.info(log_message)
+
+            if early_stopper(classifier_val_loss):
+                logger.info("\tSTOPPED")
+                break
+
+    def unet_contrastive_train_loop(self, classifier_filename, unet_filename, device, num_epochs=100, best_temp=0.05):
+        unet_optimizer = optim.Adam(
+            self.unet.parameters(),
+            lr = 3e-4,
+            weight_decay = 1e-5
+        )
+
+        body_optimizer = optim.Adam(
+            list(self.classifier.parameters()) + list(self.proj_head.parameters()),
+            lr=0.001, 
+            weight_decay=1e-5
+        )
+
+        early_stopper = EarlyStopper(patience=7)
+        best_val_loss = 1e7
+
+        for epoch in range(num_epochs):
+            # train unet once
+            _ = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+            
+            # train contrastive body with unet
+            contrast_train_loss = self._contrastive_run(
+                model=self.classifier,
+                unet_model=self.unet,
+                proj_head=self.proj_head,
+                optimizer=body_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                temperature=best_temp
+            )
+
+            self.classifier.set_freeze_head(False)
+            self.classifier.set_freeze_body(True)
+            
+            # Train the head
+            self.classification_train_loop(classifier_filename, device, mode='mixed', num_epochs=50)
+
+            self.classifier.set_freeze_head(False)
+            self.classifier.set_freeze_body(False)
+
+            classifier_val_loss, classifier_val_acc = self._classification_run(
+                model=self.classifier,
+                unet_model=self.unet,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                mode="base_only",
+                train=False,
+            )
+
+            log_message = f"\tEpoch {epoch+1}: {classifier_val_loss:.4f} {classifier_val_acc*100:.2f}"
+
+            if classifier_val_loss < best_val_loss:
+                log_message += " <- New Best"
+                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
+                best_val_loss = classifier_val_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
+                torch.save(self.unet.state_dict(), unet_filename)
+
+            logger.info(log_message)
+
+            if early_stopper(classifier_val_loss):
+                logger.info("\tSTOPPED")
+                break
     
     def _unet_run(self, unet_model, classifier, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
@@ -213,6 +348,7 @@ class Trainer:
         self.classifier.set_freeze_body(False)
 
         logger.info("Contrastive training and head training completed.")
+        return best_temp
 
 
     def _classification_run(self, model, optimizer, dataloader, device, mode, train=True, unet_model=None):
@@ -253,6 +389,7 @@ class Trainer:
             dataloader.dataset.unique_sources = False
         
         for base_samples, aux_samples, labels in dataloader:
+            labels = labels.long()
             base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
             
             if train:
@@ -362,6 +499,7 @@ class Trainer:
             unet_model.eval()
         
         for base_samples, aux_samples, labels in dataloader:
+            labels = labels.long()
             base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
             
             if unet_model!=None:

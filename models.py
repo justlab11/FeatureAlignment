@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import logging
+import torch.nn.functional as F
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +166,141 @@ class DynamicCNN(nn.Module):
             layer_outputs.append(output)
         
         return layer_outputs
+    
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        if in_channels != out_channels or stride != 1:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+class ResNet9(nn.Module):
+    def __init__(self, num_classes=10):
+        super(ResNet9, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+        
+        self.layer1 = ResidualBlock(64, 64)
+        self.layer2 = ResidualBlock(64, 64)
+        self.layer3 = ResidualBlock(64, 64)
+        
+        self.layer4 = ResidualBlock(64, 128, stride=2)
+        self.layer5 = ResidualBlock(128, 128)
+        
+        self.layer6 = ResidualBlock(128, 256, stride=2)
+        self.layer7 = ResidualBlock(256, 256)
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        
+        out = self.layer4(out)
+        out = self.layer5(out)
+        
+        out = self.layer6(out)
+        out = self.layer7(out)
+        
+        out = self.avgpool(out)
+        out = torch.flatten(out, 1)
+        out = self.fc(out)
+        
+        return out
+
+    
+class DynamicResNet(nn.Module):
+    def __init__(self, resnet_type='resnet9', num_classes=10):
+        super(DynamicResNet, self).__init__()
+        
+        resnet_models = {
+            'resnet9': ResNet9,
+            'resnet18': resnet18,
+            'resnet34': resnet34,
+            'resnet50': resnet50,
+            'resnet101': resnet101,
+            'resnet152': resnet152
+        }
+        
+        if resnet_type not in resnet_models:
+            raise ValueError(f"Invalid ResNet type. Choose from {list(resnet_models.keys())}")
+        
+        if resnet_type != 'resnet9':
+            self.model = resnet_models[resnet_type](pretrained=False)
+        else:
+            self.model = resnet_models[resnet_type]()
+
+        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
+        
+        self.freeze_head = False
+        self.freeze_body = False
+
+    def set_freeze_head(self, freeze: bool):
+        self.freeze_head = freeze
+        for param in self.model.fc.parameters():
+            param.requires_grad = not freeze
+        if freeze and self.freeze_body:
+            logger.error("Cannot freeze both head and body simultaneously.")
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def set_freeze_body(self, freeze: bool):
+        self.freeze_body = freeze
+        for name, param in self.model.named_parameters():
+            if "fc" not in name:  # Freeze all layers except the final fully connected layer
+                param.requires_grad = not freeze
+        if freeze and self.freeze_head:
+            logger.error("Cannot freeze both head and body simultaneously.")
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def forward(self, x):
+        layer_outputs = []
+
+        def hook_fn(module, input, output):
+            if self.freeze_body:
+                layer_outputs.append(output.detach())
+            else:
+                layer_outputs.append(output)
+
+        hooks = []
+        for name, module in self.model.named_children():
+            if name != 'fc':  # Don't add hook to the final layer
+                hooks.append(module.register_forward_hook(hook_fn))
+
+        # Forward pass
+        output = self.model(x)
+
+        # Remove hooks
+        for hook in hooks:
+            hook.remove()
+
+        if not self.freeze_head:
+            layer_outputs.append(output)
+
+        return layer_outputs
+    
+    def get_num_layers(self):
+        return len(list(self.model.children()))
+
     
 class CustomUNET(nn.Module):
     def __init__(self):

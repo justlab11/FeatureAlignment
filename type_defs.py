@@ -5,12 +5,14 @@ import numpy as np
 import torch.nn as nn
 
 class DatasetConfig(BaseModel):
-    name: str = "mnist"
-    base_ds: str = "normal"
-    aux_ds: str = "skip"
+    base_name: str
+    base_folder: str
+    aux_name: str
+    aux_folder: str
+
     rng_seed: int = 72
-    batch_size: int = 64
-    base_sample_ratio: float = .2
+    batch_size: int = 16
+    base_sample_ratio: float = 0.1
 
 class SaveLocationsConfig(BaseModel):
     model_folder: str = "models"
@@ -19,16 +21,13 @@ class SaveLocationsConfig(BaseModel):
     logs_folder: str = "logs"
 
 class ClassifierConfig(BaseModel):
-    identifier: str
-    num_filters: List[int] = [8, 16]
-    kernel_size: List[int] = [3, 3]
-    stride: List[int] = [1, 1]
-    padding: List[int] = [1, 1]
-    mlp_layer_sizes: List[int] = [32]
-    num_classes: int = 10
+    model: str = "resnet18"
+    identifier: str = "tiny"
+    num_epochs: int = 50
 
 class UNetConfig(BaseModel):
     loss: str = "ebsw"
+    num_epochs: int = 50
 
 class Config(BaseModel):
     dataset: DatasetConfig
