@@ -54,12 +54,20 @@ logger.info("Creating Datasets")
 base_dir = CONFIG.dataset.base_folder
 aux_dir = CONFIG.dataset.aux_folder
 
+# transform = transforms.Compose([
+#     EnsureThreeChannelsPIL(),
+#     transforms.Resize(256),
+#     transforms.CenterCrop(224),
+#     transforms.ToTensor(),
+#     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+# ])
+
 transform = transforms.Compose([
-    EnsureThreeChannelsPIL(),
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.ToTensor(),  # Convert the image to a tensor
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),  # Normalize with CIFAR-10 mean and std
+    transforms.Pad(4),  # Add zero-padding
+    transforms.RandomCrop(32),  # Randomly crop the image to 32x32
+    transforms.RandomHorizontalFlip(),  # Randomly flip the image horizontally
 ])
 
 base_full_dataset = HEIFFolder(base_dir, transform=transform)

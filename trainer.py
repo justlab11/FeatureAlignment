@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import logging
+from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
 
 from models import DynamicCNN
 from helpers import EarlyStopper
@@ -43,11 +44,12 @@ class Trainer:
 
 
     def classification_train_loop(self, filename, device, mode, num_epochs=50):
-        optimizer = optim.Adam(
-            self.classifier.parameters(),
-            lr=.001,
-            weight_decay=1e-5
-        )
+        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-8, momentum=.9, 
+                              nestrov=True, weight_decay=1e-2)
+
+        linear_scheduler = LambdaLR(optimizer, self._linear_increase)
+        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=70, eta_min=1e-8)
+
         early_stopper = EarlyStopper(
             patience=5,
             min_delta=0
@@ -527,5 +529,11 @@ class Trainer:
         for layer in model.children():
             if hasattr(layer, 'reset_parameters'):
                 layer.reset_parameters()
+    
+    def _linear_increase(epoch):
+        if epoch < 30:
+            return (1e-1 / 30) * epoch + 1e-8
+        else:
+            return 1e-1
 
 
