@@ -54,21 +54,18 @@ logger.info("Creating Datasets")
 base_dir = CONFIG.dataset.base_folder
 aux_dir = CONFIG.dataset.aux_folder
 
-# transform = transforms.Compose([
-#     EnsureThreeChannelsPIL(),
-#     transforms.Resize(256),
-#     transforms.CenterCrop(224),
-#     transforms.ToTensor(),
-#     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-# ])
-
 transform = transforms.Compose([
-    transforms.ToTensor(),  # Convert the image to a tensor
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),  # Normalize with CIFAR-10 mean and std
-    transforms.Pad(4),  # Add zero-padding
-    transforms.RandomCrop(32),  # Randomly crop the image to 32x32
-    transforms.RandomHorizontalFlip(),  # Randomly flip the image horizontally
+    EnsureThreeChannelsPIL(),
+    transforms.Resize(128),
 ])
+
+# transform = transforms.Compose([
+#     transforms.ToTensor(),  # Convert the image to a tensor
+#     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),  # Normalize with CIFAR-10 mean and std
+#     transforms.Pad(4),  # Add zero-padding
+#     transforms.RandomCrop(32),  # Randomly crop the image to 32x32
+#     transforms.RandomHorizontalFlip(),  # Randomly flip the image horizontally
+# ])
 
 base_full_dataset = HEIFFolder(base_dir, transform=transform)
 aux_full_dataset = HEIFFolder(aux_dir, transform=transform)
@@ -146,7 +143,6 @@ model = DynamicResNet(
     num_classes=10
 )
 
-
 mixed_model_trainer = Trainer(
     classifier = model,
     dataloaders=dl_set
@@ -168,7 +164,6 @@ model = DynamicResNet(
     num_classes=10
 )
 
-
 contrast_model_trainer = Trainer(
     classifier = model,
     dataloaders=dl_set,
@@ -183,6 +178,28 @@ best_temp = contrast_model_trainer.contrastive_train_loop(
 
 
 logger.info("Getting Model Accuracy")
+
+base_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+base_model.load_state_dict(torch.load(base_model_file, weights_only=True))
+base_model_trainer.classifier = base_model
+
+mixed_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+mixed_model.load_state_dict(torch.load(mixed_model_file, weights_only=True))
+mixed_model_trainer.classifier = mixed_model
+
+contrast_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+contrast_model.load_state_dict(torch.load(contrast_model_file, weights_only=True))
+contrast_model_trainer.classifier = contrast_model
+
 base_acc = base_model_trainer.evaluate_model(DEVICE)
 logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
 
@@ -280,6 +297,18 @@ contrast_model_trainer.unet_train_loop(
 
 logger.info("Getting Model + UNET (WS) Accuracy")
 
+base_unet = CustomUNET()
+base_unet.load_state_dict(torch.load(base_unet_ws_fname, weights_only=True))
+base_model_trainer.unet = base_unet
+
+mixed_unet = CustomUNET()
+mixed_unet.load_state_dict(torch.load(mixed_unet_ws_fname, weights_only=True))
+mixed_model_trainer.unet = mixed_unet
+
+contrast_unet = CustomUNET()
+contrast_unet.load_state_dict(torch.load(contrast_unet_ws_fname, weights_only=True))
+contrast_model_trainer.unet = contrast_unet
+
 base_acc = base_model_trainer.evaluate_model(DEVICE)
 logger.info(f"Base Model + UNET (WS) Accuracy: {round(base_acc*100, 2)}%")
 
@@ -302,9 +331,9 @@ models = ModelSet(
 )
 
 unet_models = ModelSet(
-    base=base_unet,
-    mixed=mixed_unet,
-    contrast=contrast_unet
+    base=base_model_trainer.unet,
+    mixed=mixed_model_trainer.unet,
+    contrast=contrast_model_trainer.unet
 )
 
 accuracies = ModelSet(
@@ -385,6 +414,40 @@ contrast_model_trainer.unet_contrastive_train_loop(
 
 
 logger.info("Getting Model + UNET (FINAL) Accuracy")
+
+base_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+base_model.load_state_dict(torch.load(base_classifier_final_fname, weights_only=True))
+base_model_trainer.classifier = base_model
+
+mixed_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+mixed_model.load_state_dict(torch.load(mixed_classifier_final_fname, weights_only=True))
+mixed_model_trainer.classifier = mixed_model
+
+contrast_model = DynamicResNet(
+    resnet_type='resnet9',
+    num_classes=10
+)
+contrast_model.load_state_dict(torch.load(contrast_classifier_final_fname, weights_only=True))
+contrast_model_trainer.classifier = contrast_model
+
+base_unet = CustomUNET()
+base_unet.load_state_dict(torch.load(base_unet_final_fname, weights_only=True))
+base_model_trainer.unet = base_unet
+
+mixed_unet = CustomUNET()
+mixed_unet.load_state_dict(torch.load(mixed_unet_final_fname, weights_only=True))
+mixed_model_trainer.unet = mixed_unet
+
+
+contrast_unet = CustomUNET()
+contrast_unet.load_state_dict(torch.load(contrast_unet_final_fname, weights_only=True))
+contrast_model_trainer.unet = contrast_unet
 
 base_acc = base_model_trainer.evaluate_model(DEVICE)
 logger.info(f"Base Model + UNET (FINAL) Accuracy: {round(base_acc*100, 2)}%")

@@ -43,17 +43,12 @@ class Trainer:
             self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
 
 
-    def classification_train_loop(self, filename, device, mode, num_epochs=50):
+    def classification_train_loop(self, filename, device, mode, num_epochs=70):
         optimizer = optim.SGD(self.classifier.parameters(), lr=1e-8, momentum=.9, 
                               nestrov=True, weight_decay=1e-2)
 
         linear_scheduler = LambdaLR(optimizer, self._linear_increase)
         cosine_scheduler = CosineAnnealingLR(optimizer, T_max=70, eta_min=1e-8)
-
-        early_stopper = EarlyStopper(
-            patience=5,
-            min_delta=0
-        )
 
         best_val = 1e7
 
@@ -66,6 +61,11 @@ class Trainer:
                 mode = mode,
                 device = device
             )
+
+            if epoch < 30:
+                linear_scheduler.step()
+            else:
+                cosine_scheduler.step()
 
             val_loss, val_acc = self._classification_run(
                 model = self.classifier,
@@ -86,10 +86,6 @@ class Trainer:
 
             logger.info(log_message)
 
-            if early_stopper(val_loss):
-                logger.info("\tSTOPPED")
-                break
-
     def evaluate_model(self, device):
         _, val_acc = self._classification_run(
             model=self.classifier,
@@ -109,7 +105,6 @@ class Trainer:
             lr = 3e-4,
             weight_decay = 1e-5
         )
-        early_stopper = EarlyStopper(patience=7)
         unet_val_loss = 1e7
 
         for epoch in range(num_epochs):
@@ -150,10 +145,6 @@ class Trainer:
 
             logger.info(log_message)
 
-            if early_stopper(val_loss):
-                logger.info("\tSTOPPED")
-                break
-
     def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, num_epochs=100):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
@@ -167,7 +158,8 @@ class Trainer:
             weight_decay = 1e-5
         )
 
-        early_stopper = EarlyStopper(patience=7)
+        cosine_scheduler = CosineAnnealingLR(classifier_optimizer, T_max=70, eta_min=1e-8)
+
         best_val_loss = 1e7
 
         for epoch in range(num_epochs):
@@ -192,6 +184,8 @@ class Trainer:
                 train=True
             )
 
+            cosine_scheduler.step()
+
             classifier_val_loss, classifier_val_acc = self._classification_run(
                 model=self.classifier,
                 unet_model=self.unet,
@@ -213,10 +207,6 @@ class Trainer:
 
             logger.info(log_message)
 
-            if early_stopper(classifier_val_loss):
-                logger.info("\tSTOPPED")
-                break
-
     def unet_contrastive_train_loop(self, classifier_filename, unet_filename, device, num_epochs=100, best_temp=0.05):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
@@ -230,7 +220,6 @@ class Trainer:
             weight_decay=1e-5
         )
 
-        early_stopper = EarlyStopper(patience=7)
         best_val_loss = 1e7
 
         for epoch in range(num_epochs):
@@ -285,9 +274,6 @@ class Trainer:
 
             logger.info(log_message)
 
-            if early_stopper(classifier_val_loss):
-                logger.info("\tSTOPPED")
-                break
     
     def _unet_run(self, unet_model, classifier, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
@@ -444,9 +430,7 @@ class Trainer:
                 lr=0.001, 
                 weight_decay=1e-5
             )
-            
-            early_stopper = EarlyStopper(patience=10, min_delta=0)
-            
+                        
             for epoch in range(num_epochs):
                 train_loss = self._contrastive_run(
                     model=self.classifier,
@@ -470,9 +454,6 @@ class Trainer:
                     best_val_loss = val_loss
                     best_temp = temp
                     torch.save(self.classifier.state_dict(), filename)
-                
-                if early_stopper(val_loss):
-                    break
         
         return best_temp, best_val_loss
 
