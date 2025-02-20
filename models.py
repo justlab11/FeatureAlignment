@@ -166,14 +166,14 @@ class DynamicCNN(nn.Module):
             layer_outputs.append(output)
         
         return layer_outputs
-    
+
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(
         in_planes,
         out_planes,
         kernel_size=3,
-        stride=stride,
+        stride=1,  # Modified: Always stride 1
         padding=dilation,
         groups=groups,
         bias=False,
@@ -183,7 +183,7 @@ def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
 
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1, bias=False) # Modified: Always stride 1
 
 
 class BasicBlock(nn.Module):
@@ -326,16 +326,18 @@ class ResNet(nn.Module):
 
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
+        # Modified: Remove max pooling
+        # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        
+        self.layer1 = self._make_layer(block, 64, layers[0], stride=1) #Modified: Remove stride
         self.layer2 = self._make_layer(
-            block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0]
+            block, 128, layers[1], stride=1, dilate=replace_stride_with_dilation[0] #Modified: Remove stride
         )
         self.layer3 = self._make_layer(
-            block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1]
+            block, 256, layers[2], stride=1, dilate=replace_stride_with_dilation[1] #Modified: Remove stride
         )
         self.layer4 = self._make_layer(
-            block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2]
+            block, 512, layers[3], stride=1, dilate=replace_stride_with_dilation[2] #Modified: Remove stride
         )
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
@@ -357,14 +359,14 @@ class ResNet(nn.Module):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
-    def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
+    def _make_layer(self, block, planes, blocks, stride=1, dilate=False): #Modified: Remove stride
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
         if dilate:
             self.dilation *= stride
             stride = 1
-        if stride != 1 or self.inplanes != planes * block.expansion:
+        if self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 conv1x1(self.inplanes, planes * block.expansion, stride),
                 norm_layer(planes * block.expansion),
@@ -402,7 +404,8 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)
+        # Modified: Remove max pooling
+        # x = self.maxpool(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
@@ -414,6 +417,7 @@ class ResNet(nn.Module):
         x = self.fc(x)
 
         return x
+
     
 class DynamicResNet(nn.Module):
     def __init__(self, resnet_type='resnet9', num_classes=10):
@@ -462,6 +466,18 @@ class DynamicResNet(nn.Module):
         
     def get_body_output_size(self):
         return self.body_output_size
+    
+    def reset_parameters(self):
+        for module in self.model.modules():
+            if isinstance(module, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
+                nn.init.xavier_normal_(module.weight)
+
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+            elif isinstance(module, nn.BatchNorm2d):
+                nn.init.constant_(module.weight, 1)
+                nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
         layer_outputs = []

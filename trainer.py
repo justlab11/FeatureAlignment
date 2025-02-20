@@ -3,8 +3,9 @@ from torchvision import transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
+import numpy as np 
 import logging
-from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
 
 from models import DynamicCNN
 from helpers import EarlyStopper
@@ -42,13 +43,152 @@ class Trainer:
         if unet_load_path:
             self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
 
+    def unet_preloader_train_loop(self, unet_filename, classifier_filename, device, num_epochs=100, train_both=True):
+        if self.classifier == None:
+            logger.error("No classifier found in trainer")
+            raise ValueError("No classifier found in trainer")
+        
+        if train_both:
+            if self.unet == None:
+                logger.error("No UNET found in trainer")
+                raise ValueError("No UNET found in trainer")
+            
+            best_unet_val = 1e7
+            unet_optimizer = optim.Adam(self.unet.parameters(), lr=1e-3)
 
-    def classification_train_loop(self, filename, device, mode, num_epochs=70):
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-8, momentum=.9, 
-                              nestrov=True, weight_decay=1e-2)
+            self.unet.to(device)
 
-        linear_scheduler = LambdaLR(optimizer, self._linear_increase)
-        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=70, eta_min=1e-8)
+            for epoch in range(num_epochs):
+                self.unet.train()
+                for base, aux, _ in self.train_loader:
+                    unet_optimizer.zero_grad()
+                    base = base.to(device)
+                    aux = aux.to(device)
+
+                    combined_input = torch.cat((base, aux), dim=0)
+
+                    output = self.unet(combined_input)
+
+                    loss = nn.MSELoss()(output, combined_input)
+
+                    loss.backward()
+                    unet_optimizer.step()
+
+                self.unet.eval()
+                total_loss = 0
+                with torch.no_grad():
+                    for base, aux, _ in self.val_loader:
+                        base = base.to(device)
+                        aux = aux.to(device)
+
+                        combined_input = torch.cat((base, aux), dim=0)
+
+                        output = self.unet(combined_input)
+                        loss = nn.MSELoss()(output, combined_input)
+                        total_loss += loss
+
+                total_loss /= len(self.val_loader)
+                if total_loss < best_unet_val:
+                    best_unet_val = total_loss
+                    torch.save(self.unet.state_dict(), unet_filename)
+
+        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
+
+        classifier_optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
+                                    nesterov=True, weight_decay=1e-2)
+
+        classifier_scheduler = CosineAnnealingWarmRestarts(
+            optimizer=classifier_optimizer,
+            T_0=20,
+            T_mult=1,
+            eta_min=1e-8
+        )
+
+        best_classifier_val = 1e7
+        self.classifier.to(device)
+        self.unet.to(device)
+
+        self.unet.eval()
+        for epoch in range(num_epochs):
+            self.classifier.train()
+            for base, aux, labels in self.train_loader:
+                classifier_optimizer.zero_grad()
+                labels = labels.long()
+
+                base = base.to(device)
+                aux = aux.to(device)
+                labels = labels.to(device)
+
+                with torch.no_grad():
+                    combined_input = torch.cat((base, aux), dim=0)
+                    reconstructed_input = self.unet(combined_input)
+
+                output = self.classifier(reconstructed_input)
+
+                loss = nn.CrossEntropyLoss()(output[-1], labels.repeat(2))
+
+                loss.backward()
+                classifier_optimizer.step()
+
+            classifier_scheduler.step()
+
+            self.classifier.eval()
+            running_loss = 0
+            total = 0
+            correct = 0
+            for base, aux, labels in self.val_loader:
+                labels = labels.long()
+
+                base = base.to(device)
+                aux = aux.to(device)
+                labels = labels.to(device)
+
+                with torch.no_grad():
+                    combined_input = torch.cat((base, aux), dim=0)
+                    reconstructed_input = self.unet(combined_input)
+
+                output = self.classifier(reconstructed_input)
+
+                loss = nn.CrossEntropyLoss()(output[-1], labels.repeat(2))
+
+                _, predicted = output[-1].max(1)
+                total += labels.size(0) * 2
+                correct += predicted.eq(labels.repeat(2)).sum().item()
+            
+                running_loss += loss.item()
+        
+            epoch_loss = running_loss / len(self.val_loader)
+            epoch_accuracy = correct / total
+
+            log_message = f"\tEpoch {epoch+1}: {epoch_loss:.4f} {epoch_accuracy*100:.2f}"
+
+            if epoch_loss < best_classifier_val:
+                log_message += " <- New Best"
+                log_message += f"\n\tClassifier Acc: {round(epoch_accuracy*100), 2}\n"
+                best_classifier_val = epoch_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
+
+            logger.info(log_message)
+
+
+    def classification_train_loop(self, filename, device, mode, num_epochs=100):
+        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
+                              nesterov=True, weight_decay=1e-2)
+
+        # def lr_lambda(epoch):
+        #     if epoch < 30:  # Linear warmup for first 30 epochs
+        #         return (epoch * (1e-1 - 1e-8) / 30) + 1e-8
+        #     else:  # Cosine annealing for remaining epochs
+        #         return 1e-1 * 0.5 * (1 + np.cos(np.pi * (epoch - 30) / (num_epochs - 30)))
+
+        # scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer=optimizer,
+            T_0=20,
+            T_mult=1,
+            eta_min=1e-8
+        )
 
         best_val = 1e7
 
@@ -62,10 +202,10 @@ class Trainer:
                 device = device
             )
 
-            if epoch < 30:
-                linear_scheduler.step()
-            else:
-                cosine_scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
+
+            scheduler.step() 
 
             val_loss, val_acc = self._classification_run(
                 model = self.classifier,
@@ -248,7 +388,7 @@ class Trainer:
             self.classifier.set_freeze_body(True)
             
             # Train the head
-            self.classification_train_loop(classifier_filename, device, mode='mixed', num_epochs=50)
+            self.classification_train_loop(classifier_filename, device, mode='mixed', num_epochs=100)
 
             self.classifier.set_freeze_head(False)
             self.classifier.set_freeze_body(False)
@@ -314,11 +454,12 @@ class Trainer:
         return epoch_loss
 
 
-    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=200):
+    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=200, best_temp=None):
         # Step 1: Optimize temperature and train body
-        best_temp, best_val_loss = self._optimize_temperature(temp_range, num_epochs, device, filename)
+        if best_temp == None:
+            best_temp, best_val_loss = self._optimize_temperature(temp_range, num_epochs, device, filename)
         
-        logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
+            logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
         
         # Load the best model
         self.classifier.load_state_dict(torch.load(filename, weights_only=True))
@@ -329,7 +470,7 @@ class Trainer:
         
         # Train the head
         head_filename = filename.replace('body', 'full')
-        self.classification_train_loop(head_filename, device, mode='mixed', num_epochs=50)
+        self.classification_train_loop(head_filename, device, mode='mixed', num_epochs=100)
         
         # Optionally, unfreeze everything for potential fine-tuning
         self.classifier.set_freeze_head(False)
@@ -493,6 +634,7 @@ class Trainer:
             with torch.set_grad_enabled(train):
                 inputs = torch.cat((base_samples, aux_samples), 0)
                 features = model(inputs)[-1]
+                features = features.reshape(inputs.shape[0], -1)
                 projected = proj_head(features)
                 loss = criterion(projected, labels.repeat(2), temperature=temperature)
             
@@ -510,11 +652,8 @@ class Trainer:
         for layer in model.children():
             if hasattr(layer, 'reset_parameters'):
                 layer.reset_parameters()
+
     
-    def _linear_increase(epoch):
-        if epoch < 30:
-            return (1e-1 / 30) * epoch + 1e-8
-        else:
-            return 1e-1
+    
 
 

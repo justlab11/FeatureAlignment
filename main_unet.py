@@ -48,6 +48,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+logger.info(f"DEVICE: {DEVICE}")
+
 
 # dataset creation
 logger.info("Creating Datasets")
@@ -57,6 +59,7 @@ aux_dir = CONFIG.dataset.aux_folder
 transform = transforms.Compose([
     EnsureThreeChannelsPIL(),
     transforms.Resize(128),
+    transforms.ToTensor(),
 ])
 
 # transform = transforms.Compose([
@@ -130,8 +133,7 @@ base_model_trainer = Trainer(
 base_model_trainer.classification_train_loop(
     filename = base_model_file,
     device=DEVICE,
-    mode="base_only",
-    num_epochs=10
+    mode="base_only"
 )
 
 
@@ -152,7 +154,6 @@ mixed_model_trainer.classification_train_loop(
     filename = mixed_model_file,
     device=DEVICE,
     mode="mixed",
-    num_epochs=10
 )
 
 
@@ -173,7 +174,6 @@ contrast_model_trainer = Trainer(
 best_temp = contrast_model_trainer.contrastive_train_loop(
     filename = contrast_model_file,
     device=DEVICE,
-    num_epochs=10
 )
 
 

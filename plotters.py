@@ -41,9 +41,9 @@ class TSNE_Plotter:
                 outputs_aux = model(aux)[-2].cpu().numpy()
                 
 
-                embeds_base[i*self.bs:i*self.bs+self.bs] = outputs_base
-                embeds_aux[i*self.bs:i*self.bs+self.bs] = outputs_aux
-                labels[i*self.bs:i*self.bs+self.bs] = z.cpu()
+                embeds_base[i*self.bs:i*self.bs+self.bs] = outputs_base.squeeze()
+                embeds_aux[i*self.bs:i*self.bs+self.bs] = outputs_aux.squeeze()
+                labels[i*self.bs:i*self.bs+self.bs] = z.cpu().squeeze()
 
         model_embeds = EmbeddingSet(
             base_embeds = embeds_base,
@@ -91,7 +91,9 @@ class TSNE_Plotter:
                 device=device,
             )
 
-        base_model_embeds = base_embeds.base_embeds
+        base_model_embeds = np.concatenate(
+            (base_embeds.base_embeds, base_embeds.aux_embeds)
+        )
         mixed_model_embeds = np.concatenate(
             (mixed_embeds.base_embeds, mixed_embeds.aux_embeds)
         )
@@ -99,7 +101,9 @@ class TSNE_Plotter:
             (contrast_embeds.base_embeds, contrast_embeds.aux_embeds)
         )
 
-        base_labels = base_embeds.labels
+        base_labels = np.concatenate(
+            (base_embeds.labels*2, base_embeds.labels*2+1)
+        )
         mixed_labels = np.concatenate(
             (mixed_embeds.labels*2, mixed_embeds.labels*2+1)
         )
@@ -119,25 +123,36 @@ class TSNE_Plotter:
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(30, 8))
 
         # Plot for base embeddings
-        scatter1 = ax1.scatter(base_tsne[:, 0], base_tsne[:, 1], c=base_labels, cmap='tab10', alpha=.7)
+        tab20 = plt.cm.get_cmap('tab20')
+        color_dict = {i: tab20(i/20) for i in range(20)}
+
+        scatter1a = ax1.scatter(base_tsne[:len(base_tsne)//2, 0], base_tsne[:len(base_tsne)//2, 1], c=[color_dict[label] for label in base_labels[:len(base_tsne)//2]])
+        scatter1b = ax1.scatter(base_tsne[len(base_tsne)//2:, 0], base_tsne[len(base_tsne)//2:, 1], c=[color_dict[label] for label in base_labels[len(base_tsne)//2:]], marker="x", s=30)
         ax1.set_title(f'Base Model Embeddings (Accuracy: {round(accuracies.base*100, 2)}%)')
         ax1.set_xlabel('t-SNE feature 1')
         ax1.set_ylabel('t-SNE feature 2')
-        cbar = fig.colorbar(scatter1, ax=ax1)
-        ticks = np.arange(0, 10)
-        c_labels = [ 
-            "0 - Base",
-            "1 - Base",
-            "2 - Base",
-            "3 - Base",
-            "4 - Base",
-            "5 - Base",
-            "6 - Base",
-            "7 - Base",
-            "8 - Base",
-            "9 - Base",
+        colors = [color_dict[i] for i in range(20)]
+        cmap = mcolors.ListedColormap(colors)
+        bounds = np.arange(21)
+        norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+        # Create the colorbar
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax1, ticks=np.arange(0.5, 20))
+
+        c_labels = [
+            "0 - Base", "0 - Aux",
+            "1 - Base", "1 - Aux",
+            "2 - Base", "2 - Aux",
+            "3 - Base", "3 - Aux",
+            "4 - Base", "4 - Aux",
+            "5 - Base", "5 - Aux",
+            "6 - Base", "6 - Aux",
+            "7 - Base", "7 - Aux",
+            "8 - Base", "8 - Aux",
+            "9 - Base", "9 - Aux",
         ]
-        cbar.set_ticks(ticks)
         cbar.set_ticklabels(c_labels)
         cbar.set_label("Classes")
 

@@ -196,14 +196,14 @@ class PairedMNISTDataset(Dataset):
             label = self.base_labels[base_idx].item()
 
         pair_selection = np.random.uniform()
-        if pair_selection < .5 or self.unique_sources:
+        if pair_selection < .7 or self.unique_sources:
             base_sample = self.base_images[base_idx]
             if self.specific_class is not None:
                 aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
             else:
                 aux_idx = np.random.choice(self.aux_indices_by_class[label])
             aux_sample = self.aux_images[aux_idx]
-        elif pair_selection < .75:
+        elif pair_selection < .85:
             base_sample = self.base_images[base_idx]
             if self.specific_class is not None:
                 aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
