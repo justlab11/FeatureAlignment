@@ -513,9 +513,9 @@ class Trainer:
         total = 0
 
         if mode == "base_only":
-            dataloader.dataset.unique_sources = True 
+            dataloader.dataset.dataset.unique_sources = True 
         else:
-            dataloader.dataset.unique_sources = False
+            dataloader.dataset.dataset.unique_sources = False
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()

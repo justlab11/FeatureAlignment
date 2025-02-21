@@ -55,10 +55,10 @@ class HEIFFolder(Dataset):
         return self.class_samples
     
 class CombinedDataset(Dataset):
-    def __init__(self, base_dataset, aux_dataset, unique_sources=False):
+    def __init__(self, base_dataset, aux_dataset):
         self.base_dataset = base_dataset
         self.aux_dataset = aux_dataset
-        self.unique_sources = unique_sources
+        self.unique_sources = False
         
         # Get class samples from both datasets
         self.base_class_samples = base_dataset.class_samples
@@ -70,6 +70,9 @@ class CombinedDataset(Dataset):
 
     def __len__(self):
         return len(self.base_dataset)
+    
+    def toggle_unique_sources(self, value:bool):
+        self.unique_sources = value
 
     def __getitem__(self, index):
         base_file_path = self.base_file_paths[index]
@@ -84,6 +87,7 @@ class CombinedDataset(Dataset):
         pair_selection = np.random.uniform()
         
         if self.unique_sources or pair_selection < 0.5:
+            print(True, pair_selection, self.unique_sources)
             # Ensure base and aux are from different sources
             aux_idx = np.random.choice(self.aux_class_samples[label])
             aux_file_path = self.aux_file_paths[aux_idx]
