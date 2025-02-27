@@ -43,134 +43,6 @@ class Trainer:
         if unet_load_path:
             self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
 
-    def unet_preloader_train_loop(self, unet_filename, classifier_filename, device, num_epochs=100, train_both=True):
-        if self.classifier == None:
-            logger.error("No classifier found in trainer")
-            raise ValueError("No classifier found in trainer")
-        
-        if train_both:
-            if self.unet == None:
-                logger.error("No UNET found in trainer")
-                raise ValueError("No UNET found in trainer")
-            
-            best_unet_val = 1e7
-            unet_optimizer = optim.Adam(self.unet.parameters(), lr=1e-3)
-
-            self.unet.to(device)
-
-            for epoch in range(num_epochs):
-                self.unet.train()
-                for base, aux, _ in self.train_loader:
-                    unet_optimizer.zero_grad()
-                    base = base.to(device)
-                    aux = aux.to(device)
-
-                    combined_input = torch.cat((base, aux), dim=0)
-
-                    output = self.unet(combined_input)
-
-                    loss = nn.MSELoss()(output, combined_input)
-
-                    loss.backward()
-                    unet_optimizer.step()
-
-                self.unet.eval()
-                total_loss = 0
-                with torch.no_grad():
-                    for base, aux, _ in self.val_loader:
-                        base = base.to(device)
-                        aux = aux.to(device)
-
-                        combined_input = torch.cat((base, aux), dim=0)
-
-                        output = self.unet(combined_input)
-                        loss = nn.MSELoss()(output, combined_input)
-                        total_loss += loss
-
-                total_loss /= len(self.val_loader)
-                if total_loss < best_unet_val:
-                    best_unet_val = total_loss
-                    torch.save(self.unet.state_dict(), unet_filename)
-
-        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
-
-        classifier_optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
-                                    nesterov=True, weight_decay=1e-2)
-
-        classifier_scheduler = CosineAnnealingWarmRestarts(
-            optimizer=classifier_optimizer,
-            T_0=20,
-            T_mult=1,
-            eta_min=1e-8
-        )
-
-        best_classifier_val = 1e7
-        self.classifier.to(device)
-        self.unet.to(device)
-
-        self.unet.eval()
-        for epoch in range(num_epochs):
-            self.classifier.train()
-            for base, aux, labels in self.train_loader:
-                classifier_optimizer.zero_grad()
-                labels = labels.long()
-
-                base = base.to(device)
-                aux = aux.to(device)
-                labels = labels.to(device)
-
-                with torch.no_grad():
-                    combined_input = torch.cat((base, aux), dim=0)
-                    reconstructed_input = self.unet(combined_input)
-
-                output = self.classifier(reconstructed_input)
-
-                loss = nn.CrossEntropyLoss()(output[-1], labels.repeat(2))
-
-                loss.backward()
-                classifier_optimizer.step()
-
-            classifier_scheduler.step()
-
-            self.classifier.eval()
-            running_loss = 0
-            total = 0
-            correct = 0
-            for base, aux, labels in self.val_loader:
-                labels = labels.long()
-
-                base = base.to(device)
-                aux = aux.to(device)
-                labels = labels.to(device)
-
-                with torch.no_grad():
-                    combined_input = torch.cat((base, aux), dim=0)
-                    reconstructed_input = self.unet(combined_input)
-
-                output = self.classifier(reconstructed_input)
-
-                loss = nn.CrossEntropyLoss()(output[-1], labels.repeat(2))
-
-                _, predicted = output[-1].max(1)
-                total += labels.size(0) * 2
-                correct += predicted.eq(labels.repeat(2)).sum().item()
-            
-                running_loss += loss.item()
-        
-            epoch_loss = running_loss / len(self.val_loader)
-            epoch_accuracy = correct / total
-
-            log_message = f"\tEpoch {epoch+1}: {epoch_loss:.4f} {epoch_accuracy*100:.2f}"
-
-            if epoch_loss < best_classifier_val:
-                log_message += " <- New Best"
-                log_message += f"\n\tClassifier Acc: {round(epoch_accuracy*100), 2}\n"
-                best_classifier_val = epoch_loss
-                torch.save(self.classifier.state_dict(), classifier_filename)
-
-            logger.info(log_message)
-
-
     def classification_train_loop(self, filename, device, mode, num_epochs=100):
         optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
                               nesterov=True, weight_decay=1e-2)
@@ -225,6 +97,8 @@ class Trainer:
                 torch.save(self.classifier.state_dict(), filename)
 
             logger.info(log_message)
+
+        self.classifier.load_state_dict(torch.load(filename, weights_only=True))
 
     def evaluate_model(self, device):
         _, val_acc = self._classification_run(
@@ -285,22 +159,39 @@ class Trainer:
 
             logger.info(log_message)
 
+        self.unet.load_state_dict(torch.load(filename, weights_only=True))
+
     def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, num_epochs=100):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
-            lr = 3e-4,
+            lr = 3e-3,
             weight_decay = 1e-5
         )
 
         classifier_optimizer = optim.Adam(
             self.classifier.parameters(),
-            lr = 3e-4,
+            lr = 1e-4,
             weight_decay = 1e-5
         )
 
-        cosine_scheduler = CosineAnnealingLR(classifier_optimizer, T_max=70, eta_min=1e-8)
+        cosine_scheduler = CosineAnnealingWarmRestarts(
+            optimizer=classifier_optimizer,
+            T_0=25,
+            T_mult=1,
+            eta_min=1e-8
+        )
 
         best_val_loss = 1e7
+
+        for ws_epoch in range(10):
+            _ = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
 
         for epoch in range(num_epochs):
             # train unet once
@@ -324,7 +215,7 @@ class Trainer:
                 train=True
             )
 
-            cosine_scheduler.step()
+            # cosine_scheduler.step()
 
             classifier_val_loss, classifier_val_acc = self._classification_run(
                 model=self.classifier,
@@ -347,6 +238,9 @@ class Trainer:
 
             logger.info(log_message)
 
+        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
+        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
+
     def unet_contrastive_train_loop(self, classifier_filename, unet_filename, device, num_epochs=100, best_temp=0.05):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
@@ -361,6 +255,17 @@ class Trainer:
         )
 
         best_val_loss = 1e7
+
+        for ws_epoch in range(10):
+            # train unet once
+            _ = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
 
         for epoch in range(num_epochs):
             # train unet once
@@ -414,6 +319,8 @@ class Trainer:
 
             logger.info(log_message)
 
+        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
+        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
     
     def _unet_run(self, unet_model, classifier, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
@@ -435,13 +342,15 @@ class Trainer:
                 optimizer.zero_grad()
 
             with torch.set_grad_enabled(train):
-                unet_output = unet_model(aux_samples)
+                unet_output = unet_model(aux_samples)[-1]
                 base_reps = classifier(base_samples)
                 aux_reps = classifier(unet_output)
             
             loss = 0
             for i in range(len(base_reps)):
-                loss += criterion(base_reps[i], aux_reps[i], L=256, device=device)
+                base_reshaped = base_reps[i].view(base_reps[i].size(0), -1)
+                aux_reshaped = aux_reps[i].view(aux_reps[i].size(0), -1)
+                loss += criterion(base_reshaped, aux_reshaped, L=256, device=device)
 
             if train:
                 loss.backward()
@@ -515,7 +424,7 @@ class Trainer:
         if mode == "base_only":
             dataloader.dataset.dataset.unique_sources = True 
         else:
-            dataloader.dataset.dataset.unique_sources = False
+            dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
@@ -535,7 +444,7 @@ class Trainer:
                 
                 else:
                     if unet_model != None:
-                        aux_samples = unet_model(aux_samples)
+                        aux_samples = unet_model(aux_samples)[1]
 
                     inputs = torch.cat((base_samples, aux_samples), 0)
 
@@ -624,10 +533,15 @@ class Trainer:
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
+            group_labels = torch.cat([
+                torch.zeros(len(base_samples)),
+                torch.ones(len(aux_samples)),
+            ]).long()
+            group_labels = group_labels.reshape(1, -1)
             base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
             
             if unet_model!=None:
-                aux_samples = unet_model(aux_samples)
+                aux_samples = unet_model(aux_samples)[-1]
             if train:
                 optimizer.zero_grad()
             
@@ -636,7 +550,7 @@ class Trainer:
                 features = model(inputs)[-1]
                 features = features.reshape(inputs.shape[0], -1)
                 projected = proj_head(features)
-                loss = criterion(projected, labels.repeat(2), temperature=temperature)
+                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
             
             if train:
                 loss.backward()
@@ -653,7 +567,167 @@ class Trainer:
             if hasattr(layer, 'reset_parameters'):
                 layer.reset_parameters()
 
-    
-    
+class PreloaderTrainer:
+    def __init__(self, autoencoder, dataloaders: DataLoaderSet, unet, 
+                 ae_load_path=None, unet_load_path=None):
+        
+        if unet_load_path and not ae_load_path:
+            logger.warning("UNET weights were given, but no classifier weights were given")
+
+        self.autoencoder = autoencoder
+        if ae_load_path:
+            self.autoencoder.load_state_dict(torch.load(ae_load_path, weights_only=True))
+
+        self.train_loader: DataLoader = dataloaders.train_loader
+        self.test_loader: DataLoader= dataloaders.test_loader
+        self.val_loader: DataLoader = dataloaders.val_loader
+
+        self.unet = unet
+        if unet_load_path:
+            self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
+
+    def unet_preloader_train_loop(self, ae_filename, unet_filename, device, num_epochs=100, train_both=True):
+        if self.autoencoder == None:
+            logger.error("No classifier found in trainer")
+            raise ValueError("No classifier found in trainer")
+        
+        if train_both:
+            if self.unet == None:
+                logger.error("No UNET found in trainer")
+                raise ValueError("No UNET found in trainer")
+            
+            best_ae_val = 1e7
+            best_unet_val = 1e7
+            ae_optimizer = optim.Adam(self.autoencoder.parameters(), lr=1e-3)
+
+            self.unet.to(device)
+            self.autoencoder.to(device)
+
+            for epoch in range(num_epochs):
+                self.unet.train()
+                for base, aux, _ in self.train_loader:
+                    ae_optimizer.zero_grad()
+                    base = base.to(device)
+                    aux = aux.to(device)
+
+                    combined_input = torch.cat((base, aux), dim=0)
+
+                    output = self.autoencoder(combined_input)[-1]
+
+                    loss = nn.MSELoss()(output, combined_input)
+
+                    loss.backward()
+                    ae_optimizer.step()
+
+                self.unet.eval()
+                total_loss = 0
+                with torch.no_grad():
+                    for base, aux, _ in self.val_loader:
+                        base = base.to(device)
+                        aux = aux.to(device)
+
+                        combined_input = torch.cat((base, aux), dim=0)
+
+                        output = self.autoencoder(combined_input)[-1]
+                        loss = nn.MSELoss()(output, combined_input)
+                        total_loss += loss
+
+                total_loss /= len(self.val_loader)
+                if total_loss < best_ae_val:
+                    best_ae_val = total_loss
+                    torch.save(self.autoencoder.state_dict(), ae_filename)
+
+        self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
+
+
+
+        unet_optimizer = optim.SGD(self.unet.parameters(), lr=1e-2, momentum=.9, 
+                                    nesterov=True, weight_decay=1e-2)
+
+        best_unet_val = 1e7
+
+        self.autoencoder.to(device)
+        self.unet.to(device)
+
+        self.autoencoder.eval()
+        for epoch in range(num_epochs):
+            self.autoencoder.train()
+            for base, aux, labels in self.train_loader:
+                labels = labels.long()
+
+                base = base.to(device)
+                aux = aux.to(device)
+                labels = labels.to(device)
+
+                self._unet_run(
+                    autoencoder=self.autoencoder,
+                    unet_model=self.unet,
+                    optimizer=unet_optimizer,
+                    dataloader=self.train_loader,
+                    device=device,
+                    train=True
+                )
+
+                epoch_loss = self._unet_run(
+                    autoencoder=self.autoencoder,
+                    unet_model=self.unet,
+                    optimizer=None,
+                    dataloader=self.val_loader,
+                    device=device,
+                    train=False
+                )
+
+            log_message = f"\tEpoch {epoch+1}: {epoch_loss:.4f}"
+
+            if epoch_loss < best_unet_val:
+                log_message += " <- New Best"
+                best_unet_val = epoch_loss
+                torch.save(self.unet.state_dict(), unet_filename)
+
+            logger.info(log_message)
+
+        self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
+        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
+
+    def _unet_run(self, autoencoder, unet_model, optimizer, dataloader, device, train=True):
+        criterion = ISEBSW
+        unet_model.to(device)
+        autoencoder.to(device)
+
+        if train:
+            unet_model.train()
+        else:
+            unet_model.eval()
+
+        autoencoder.eval()
+
+        running_loss = 0.0
+
+        for base_samples, aux_samples, _ in dataloader: 
+            base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+            if train:
+                optimizer.zero_grad()
+
+            with torch.set_grad_enabled(train):
+                unet_output = unet_model(aux_samples)[-1]
+                base_reps = autoencoder(base_samples)
+                aux_reps = autoencoder(unet_output)
+            
+            loss = 0
+            for i in range(len(base_reps)//2):
+                base_reshaped = base_reps[i].view(base_reps[i].size(0), -1)
+                aux_reshaped = aux_reps[i].view(aux_reps[i].size(0), -1)
+                loss += criterion(base_reshaped, aux_reshaped, L=256, device=device)
+
+            if train:
+                loss.backward()
+                optimizer.step()
+
+            running_loss += loss.item()
+
+        epoch_loss = running_loss / len(dataloader)
+
+        return epoch_loss
+
 
 

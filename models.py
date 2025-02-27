@@ -540,20 +540,41 @@ class CustomUNET(nn.Module):
         )
     
     def forward(self, x):
+        layer_outputs = []
+
         # Encoder
         e1 = self.enc1(x)
+        layer_outputs.append(e1)
+
         e2 = self.enc2(self.pool(e1))
+        layer_outputs.append(e2)
+
         e3 = self.enc3(self.pool(e2))
+        layer_outputs.append(e3)
+
         e4 = self.enc4(self.pool(e3))
+        layer_outputs.append(e4)
+
         e5 = self.enc5(self.pool(e4))  # This is the 2x2x512 latent space
+        layer_outputs.append(e5)
         
         # Decoder
         d4 = self.dec4(torch.cat([self.upsample(e5), e4], dim=1))
+        layer_outputs.append(d4)
+
         d3 = self.dec3(torch.cat([self.upsample(d4), e3], dim=1))
+        layer_outputs.append(d3)
+
         d2 = self.dec2(torch.cat([self.upsample(d3), e2], dim=1))
+        layer_outputs.append(d2)
+
         d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
+        layer_outputs.append(d1)
+
+        final = self.final(d1)
+        layer_outputs.append(final)
         
-        return self.final(d1)
+        return layer_outputs
 
 class ProjNet(nn.Module):
     def __init__(self, size):

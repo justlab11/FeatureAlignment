@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def supervised_contrastive_loss(features, labels, temperature):
+def supervised_contrastive_loss(features, labels, group_labels, temperature):
     """
     Compute the supervised contrastive loss
     
@@ -25,6 +25,7 @@ def supervised_contrastive_loss(features, labels, temperature):
     # Create a mask for positive pairs
     labels = labels.contiguous().view(-1, 1)
     mask = torch.eq(labels, labels.T).float().to(device)
+    inter_mask = torch.ne(group_labels, group_labels.T).float().to(device)
     
     # Exclude self-contrast
     logits_mask = torch.scatter(
@@ -33,18 +34,26 @@ def supervised_contrastive_loss(features, labels, temperature):
         torch.arange(batch_size).view(-1, 1).to(device),
         0
     )
-    mask = mask * logits_mask
-    
+    mask_exc = mask*logits_mask
+
+    pos_inter_mask = mask*inter_mask
+    neg_inter_mask = (1-mask)*inter_mask
+
     # Compute log_prob
-    exp_logits = torch.exp(similarity_matrix) * logits_mask
-    log_prob = similarity_matrix - torch.log(exp_logits.sum(1, keepdim=True))
+    exp_logits = torch.exp(similarity_matrix)*logits_mask  
+    neg_exp_logits = exp_logits*(1-mask) # all negatives
+
+    log_prob = similarity_matrix - torch.log(exp_logits +  neg_exp_logits.sum(1, keepdim=True))
+
+    neg_inter_exp_logits = exp_logits*neg_inter_mask  # inter negatives 
+    log_prob_inter = similarity_matrix - torch.log(exp_logits + neg_inter_exp_logits.sum(1, keepdim=True))
     
     # Compute mean of log-likelihood over positive pairs
-    mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
-    
+    mean_log_prob_pos = (mask_exc * log_prob).sum(1) / mask_exc.sum(1)
+    mean_log_prob_pos_inter = (pos_inter_mask * log_prob_inter).sum(1) / (pos_inter_mask.sum(1))
+
     # Loss
-    loss = -mean_log_prob_pos
-    loss = loss.mean()
+    loss = (-mean_log_prob_pos-mean_log_prob_pos_inter ).mean()
     
     return loss
     

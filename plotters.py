@@ -97,6 +97,15 @@ class TSNE_Plotter:
         mixed_model_embeds = np.concatenate(
             (mixed_embeds.base_embeds, mixed_embeds.aux_embeds)
         )
+
+        contrast_base_norms = np.linalg.norm(contrast_embeds.base_embeds, axis=1, keepdims=True)
+        contrast_base_norms = np.maximum(contrast_base_norms, 1e-12)
+        contrast_embeds.base_embeds = contrast_embeds.base_embeds / contrast_base_norms
+
+        contrast_aux_norms = np.linalg.norm(contrast_embeds.aux_embeds, axis=1, keepdims=True)
+        contrast_aux_norms = np.maximum(contrast_aux_norms, 1e-12)
+        contrast_embeds.aux_embeds = contrast_embeds.aux_embeds / contrast_aux_norms
+        
         contrast_model_embeds = np.concatenate(
             (contrast_embeds.base_embeds, contrast_embeds.aux_embeds)
         )
