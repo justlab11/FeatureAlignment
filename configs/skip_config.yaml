@@ -5,8 +5,8 @@ dataset:
   # aux_name: "texture"
   # aux_folder: "data/texture_mnist_32"
 
-  aux_name: "texture"
-  aux_folder: "data/texture_mnist_32"
+  aux_name: "skip"
+  aux_folder: "data/mnist_skip_32"
 
   rng_seed: 72
   batch_size: 64
@@ -20,7 +20,7 @@ save_locations:
 
 classifier:
   model: "resnet9"
-  identifier: "MNIST+TexMNIST" # unique identifier for the set of models
+  identifier: "MNIST+Skip" # unique identifier for the set of models
   num_epochs: 100
 
 

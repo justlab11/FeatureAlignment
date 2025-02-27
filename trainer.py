@@ -598,7 +598,7 @@ class PreloaderTrainer:
             
             best_ae_val = 1e7
             best_unet_val = 1e7
-            ae_optimizer = optim.Adam(self.autoencoder.parameters(), lr=1e-3)
+            ae_optimizer = optim.Adam(self.autoencoder.parameters(), lr=1e-3, weight_decay=1e-5)
 
             self.unet.to(device)
             self.autoencoder.to(device)
@@ -639,10 +639,7 @@ class PreloaderTrainer:
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
 
-
-
-        unet_optimizer = optim.SGD(self.unet.parameters(), lr=1e-2, momentum=.9, 
-                                    nesterov=True, weight_decay=1e-2)
+        unet_optimizer = optim.Adam(self.unet.parameters(), lr=1e-3, weight_decay=1e-5)
 
         best_unet_val = 1e7
 
