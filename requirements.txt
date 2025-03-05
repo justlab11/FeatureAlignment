@@ -6,3 +6,4 @@ matplotlib
 pickle5
 pydantic
 PyYAML
+click

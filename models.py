@@ -519,6 +519,10 @@ class CustomUNET(nn.Module):
         self.enc3 = self.conv_block(64, 128)
         self.enc4 = self.conv_block(128, 256)
         self.enc5 = self.conv_block(256, 512)
+
+        self.noise_conv = nn.Conv1d(8, 512, kernel_size=1)
+        self.noise_weight = nn.Parameter(torch.tensor(0.1))
+        self.latent_weight = nn.Parameter(torch.tensor(1.0))
         
         # Decoder
         self.dec4 = self.conv_block(768, 256)
@@ -557,6 +561,13 @@ class CustomUNET(nn.Module):
 
         e5 = self.enc5(self.pool(e4))  # This is the 2x2x512 latent space
         layer_outputs.append(e5)
+
+        # noise = torch.randn_like(e5)
+        # e5 = e5 * self.latent_weight + noise * self.noise_weight
+
+        noise = torch.randn(e5.size(0), 8, 4, device=e5.device) # BATCH_SIZE x 2 x 2 x 8 fixed for torch
+        noise = self.noise_conv(noise).view_as(e5)
+        e5 = e5 * self.latent_weight + noise * self.noise_weight
         
         # Decoder
         d4 = self.dec4(torch.cat([self.upsample(e5), e4], dim=1))

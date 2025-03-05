@@ -36,7 +36,7 @@ class TSNE_Plotter:
                 outputs_base = model(base)[-2].cpu().numpy()
                 
                 if unet_model:
-                    aux = unet_model(aux)
+                    aux = unet_model(aux)[-1]
 
                 outputs_aux = model(aux)[-2].cpu().numpy()
                 
@@ -407,3 +407,38 @@ class EBSW_Plotter:
 
             plt.tight_layout()
             plt.savefig(filename, format="pdf", dpi=300)
+
+def plot_examples(dataset, unet_model, filename, device):
+    unet_model.eval()
+    # Randomly select 10 samples
+    num_samples = 10
+    random_samples = np.random.choice(len(dataset), num_samples, replace=False)
+
+    dataset.dataset.unique_sources = True
+
+    # Create a figure with 10 columns and 3 rows
+    fig, axes = plt.subplots(3, num_samples, figsize=(20, 6))
+
+    for i, sample_idx in enumerate(random_samples):
+        img_one, img_two, label = dataset[sample_idx]
+        img_three = img_two.unsqueeze(0).to(device)
+        img_three = unet_model(img_three)[-1][0]
+
+        img_one = np.transpose(img_one, (1, 2, 0))
+        img_two = np.transpose(img_two, (1, 2, 0))
+        img_three = np.transpose(img_three.detach().cpu(), (1, 2, 0))
+        
+        # Plot img_one in the first row
+        axes[0, i].imshow(img_one)
+        axes[0, i].axis('off')
+        axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
+        
+        # Plot img_two in the second row
+        axes[1, i].imshow(img_two)
+        axes[1, i].axis('off')
+
+        axes[2, i].imshow(img_three)
+        axes[2, i].axis('off')
+
+    plt.tight_layout()
+    plt.savefig(filename, format="pdf", dpi=300)

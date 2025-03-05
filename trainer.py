@@ -174,13 +174,6 @@ class Trainer:
             weight_decay = 1e-5
         )
 
-        cosine_scheduler = CosineAnnealingWarmRestarts(
-            optimizer=classifier_optimizer,
-            T_0=25,
-            T_mult=1,
-            eta_min=1e-8
-        )
-
         best_val_loss = 1e7
 
         for ws_epoch in range(10):
@@ -203,6 +196,9 @@ class Trainer:
                 device=device,
                 train=True
             )
+            
+            self.classifier.set_freeze_head(False)
+            self.classifier.set_freeze_body(True)
 
             # train classifier once
             _, _ = self._classification_run(
@@ -444,7 +440,12 @@ class Trainer:
                 
                 else:
                     if unet_model != None:
-                        aux_samples = unet_model(aux_samples)[1]
+                        aux_samples = unet_model(aux_samples)[-1]
+
+                    # logger.info(base_samples.shape)
+                    # logger.info(aux_samples.shape)
+                    # print(base_samples.shape)
+                    # print(aux_samples.shape)
 
                     inputs = torch.cat((base_samples, aux_samples), 0)
 
@@ -568,8 +569,8 @@ class Trainer:
                 layer.reset_parameters()
 
 class PreloaderTrainer:
-    def __init__(self, autoencoder, dataloaders: DataLoaderSet, unet, 
-                 ae_load_path=None, unet_load_path=None):
+    def __init__(self, autoencoder, dataloaders: DataLoaderSet, unet, classifier,
+                 ae_load_path=None, unet_load_path=None, classifier_load_path=None):
         
         if unet_load_path and not ae_load_path:
             logger.warning("UNET weights were given, but no classifier weights were given")
@@ -577,6 +578,10 @@ class PreloaderTrainer:
         self.autoencoder = autoencoder
         if ae_load_path:
             self.autoencoder.load_state_dict(torch.load(ae_load_path, weights_only=True))
+
+        self.classifier = classifier
+        if classifier_load_path:
+            self.classifier.load_state_dict(torch.load(classifier_load_path, weights_only=True))
 
         self.train_loader: DataLoader = dataloaders.train_loader
         self.test_loader: DataLoader= dataloaders.test_loader
@@ -686,6 +691,68 @@ class PreloaderTrainer:
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
         self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
 
+    def classification_train_loop(self, classifier_filename, device, num_epochs=100):
+        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
+                              nesterov=True, weight_decay=1e-2)
+        
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer=optimizer,
+            T_0=20,
+            T_mult=1,
+            eta_min=1e-8
+        )
+
+        best_val = 1e7
+
+        for epoch in range(num_epochs):
+            train_loss, train_acc = self._classification_run(
+                model = self.classifier,
+                unet_model = self.unet,
+                optimizer = optimizer,
+                dataloader = self.train_loader,
+                mode = "both",
+                device = device
+            )
+
+            current_lr = optimizer.param_groups[0]['lr']
+            logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
+
+            scheduler.step() 
+
+            val_loss, val_acc = self._classification_run(
+                model = self.classifier,
+                unet_model = self.unet,
+                optimizer = optimizer,
+                dataloader = self.val_loader,
+                mode = "both",
+                device = device,
+                train = False
+            )
+
+            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {train_acc*100:.2f} {val_loss:.4f} {val_acc*100:.2f}"
+
+            if val_loss < best_val:
+                log_message += " <- New Best"
+                best_val = val_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
+
+            logger.info(log_message)
+
+        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
+
+    def evaluate_model(self, device):
+        _, val_acc = self._classification_run(
+            model=self.classifier,
+            unet_model=self.unet,
+            optimizer=None,
+            dataloader=self.val_loader,
+            device=device,
+            mode="base_only",
+            train=False,
+        )
+
+        return val_acc             
+
     def _unet_run(self, autoencoder, unet_model, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
         unet_model.to(device)
@@ -726,5 +793,85 @@ class PreloaderTrainer:
 
         return epoch_loss
 
+    def _classification_run(self, model, optimizer, dataloader, device, mode, train=True, unet_model=None):
+        """
+        Run one epoch of training or evaluation on the given dataset.
+        
+        Args:
+        - model: The neural network model
+        - optimizer: The optimizer for the model (used only if train=True)
+        - dataloader: DataLoader instance for the dataset
+        - mode: 'base_only', 'base_and_aux', or 'contrastive'
+        - train: Boolean, if True, run in training mode; if False, run in evaluation mode
+        
+        Returns:
+        - Average loss for the epoch
+        - Accuracy for the epoch (for classification) or None (for contrastive)
+        """
 
+        criterion = nn.CrossEntropyLoss()
+        model.to(device)
+
+        if train:
+            model.train()
+        else:
+            model.eval()
+
+        if unet_model:
+            unet_model.to(device)
+            unet_model.eval()
+        
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        if mode == "base_only":
+            dataloader.dataset.dataset.unique_sources = True 
+        else:
+            dataloader.dataset.dataset.unique_sources = True
+        
+        for base_samples, aux_samples, labels in dataloader:
+            labels = labels.long()
+            base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
+            
+            if train:
+                optimizer.zero_grad()
+            
+            with torch.set_grad_enabled(train):
+                if mode == 'base_only' and unet_model == None:
+                    outputs = model(base_samples)[-1]
+                    loss = criterion(outputs, labels)
+                    
+                    _, predicted = outputs.max(1)
+                    total += labels.size(0)
+                    correct += predicted.eq(labels).sum().item()
+                
+                else:
+                    if unet_model != None:
+                        aux_samples = unet_model(aux_samples)[-1]
+
+                    # logger.info(base_samples.shape)
+                    # logger.info(aux_samples.shape)
+                    # print(base_samples.shape)
+                    # print(aux_samples.shape)
+
+                    inputs = torch.cat((base_samples, aux_samples), 0)
+
+                    outputs = model(inputs)[-1]
+                    loss = criterion(outputs, labels.repeat(2))
+                    
+                    _, predicted = outputs.max(1)
+                    total += labels.size(0) * 2
+                    correct += predicted.eq(labels.repeat(2)).sum().item()
+            
+            if train:
+                loss.backward()
+                optimizer.step()
+            
+            running_loss += loss.item()
+        
+        epoch_loss = running_loss / len(dataloader)
+        epoch_accuracy = correct / total
+        
+        return epoch_loss, epoch_accuracy
 

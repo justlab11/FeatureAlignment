@@ -87,7 +87,7 @@ class CombinedDataset(Dataset):
         pair_selection = np.random.uniform()
         
         if self.unique_sources or pair_selection < 0.5:
-            print(True, pair_selection, self.unique_sources)
+            # print(True, pair_selection, self.unique_sources)
             # Ensure base and aux are from different sources
             aux_idx = np.random.choice(self.aux_class_samples[label])
             aux_file_path = self.aux_file_paths[aux_idx]

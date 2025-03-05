@@ -5,8 +5,8 @@ import numpy as np
 import torch.nn as nn
 
 class DatasetConfig(BaseModel):
-    base_name: str
-    base_folder: str
+    target_name: str
+    target_folder: str
     aux_name: str
     aux_folder: str
 
