@@ -7,3 +7,5 @@ pickle5
 pydantic
 PyYAML
 click
+opencv-python
+pillow-heif

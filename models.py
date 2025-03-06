@@ -520,8 +520,10 @@ class CustomUNET(nn.Module):
         self.enc4 = self.conv_block(128, 256)
         self.enc5 = self.conv_block(256, 512)
 
+        self.latent_norm = nn.LayerNorm([512, 2, 2])
+
         self.noise_conv = nn.Conv1d(8, 512, kernel_size=1)
-        self.noise_weight = nn.Parameter(torch.tensor(0.1))
+        self.noise_weight = nn.Parameter(torch.tensor(0.05))
         self.latent_weight = nn.Parameter(torch.tensor(1.0))
         
         # Decoder
@@ -542,6 +544,11 @@ class CustomUNET(nn.Module):
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
             nn.ReLU(inplace=True)
         )
+    
+    def get_normalized_weights(self):
+        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
+        return self.noise_weight.abs()/sum_weights, self.latent_weight.abs()/sum_weights
+
     
     def forward(self, x):
         layer_outputs = []
@@ -565,10 +572,16 @@ class CustomUNET(nn.Module):
         # noise = torch.randn_like(e5)
         # e5 = e5 * self.latent_weight + noise * self.noise_weight
 
+        e5_normalized = self.latent_norm(e5)
+
         noise = torch.randn(e5.size(0), 8, 4, device=e5.device) # BATCH_SIZE x 2 x 2 x 8 fixed for torch
         noise = self.noise_conv(noise).view_as(e5)
-        e5 = e5 * self.latent_weight + noise * self.noise_weight
-        
+
+        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
+
+        e5 = e5_normalized * norm_latent_weight + noise * norm_noise_weight
+        e5 = self.latent_norm(e5)
+
         # Decoder
         d4 = self.dec4(torch.cat([self.upsample(e5), e4], dim=1))
         layer_outputs.append(d4)

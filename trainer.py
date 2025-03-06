@@ -233,7 +233,7 @@ class Trainer:
         logger.info("Starting Classifier Head Fine-tuning")
         for epoch in range(classifier_epochs):
             self.classifier.set_freeze_head(False)
-            self.classifier.set_freeze_body(True)
+            self.classifier.set_freeze_body(False)
 
             train_loss, _ = self._classification_run(
                 model = self.classifier,
