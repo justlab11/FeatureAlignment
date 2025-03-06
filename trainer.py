@@ -161,7 +161,7 @@ class Trainer:
 
         self.unet.load_state_dict(torch.load(filename, weights_only=True))
 
-    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=1, classifier_epochs=50):
+    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=100, classifier_epochs=50):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
             lr = 3e-3,

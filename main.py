@@ -161,60 +161,64 @@ def main(config_fname):
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_base_classifier_{TARGET}+{AUXILIARY}.pt"
 
-    model = models.DynamicResNet(
-        resnet_type='resnet9',
-        num_classes=10,
-    )
+    if not os.path.exists(base_model_file):
+        model = models.DynamicResNet(
+            resnet_type='resnet9',
+            num_classes=10,
+        )
 
-    base_model_trainer = trainer.Trainer(
-        classifier = model,
-        dataloaders=dl_set
-    )
+        base_model_trainer = trainer.Trainer(
+            classifier = model,
+            dataloaders=dl_set
+        )
 
-    base_model_trainer.classification_train_loop(
-        filename = base_model_file,
-        device=DEVICE,
-        mode="base_only"
-    )
+        base_model_trainer.classification_train_loop(
+            filename = base_model_file,
+            device=DEVICE,
+            mode="base_only"
+        )
 
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_{TARGET}+{AUXILIARY}.pt"
 
-    model = models.DynamicResNet(
-        resnet_type='resnet9',
-        num_classes=10
-    )
+    if not os.path.exists(mixed_model_file):
+        model = models.DynamicResNet(
+            resnet_type='resnet9',
+            num_classes=10
+        )
 
-    mixed_model_trainer = trainer.Trainer(
-        classifier = model,
-        dataloaders=dl_set
-    )
+        mixed_model_trainer = trainer.Trainer(
+            classifier = model,
+            dataloaders=dl_set
+        )
 
-    mixed_model_trainer.classification_train_loop(
-        filename = mixed_model_file,
-        device=DEVICE,
-        mode="mixed",
-    )
+        mixed_model_trainer.classification_train_loop(
+            filename = mixed_model_file,
+            device=DEVICE,
+            mode="mixed",
+        )
 
     logger.info("\nTraining Contrastive Model")
     contrast_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_LF_body_{TARGET}+{AUXILIARY}.pt"
+    contrast_full_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_LF_full_{TARGET}+{AUXILIARY}.pt"
 
-    model = models.DynamicResNet(
-        resnet_type='resnet9',
-        num_classes=10
-    )
+    if not os.path.exists(contrast_full_model_file): 
+        model = models.DynamicResNet(
+            resnet_type='resnet9',
+            num_classes=10
+        )
 
-    contrast_model_trainer = trainer.Trainer(
-        classifier = model,
-        dataloaders=dl_set,
-        contrastive=True
-    )
+        contrast_model_trainer = trainer.Trainer(
+            classifier = model,
+            dataloaders=dl_set,
+            contrastive=True
+        )
 
-    best_temp = contrast_model_trainer.contrastive_train_loop(
-        filename = contrast_model_file,
-        device=DEVICE,
-        temp_range=[0.05],
-    )
+        best_temp = contrast_model_trainer.contrastive_train_loop(
+            filename = contrast_model_file,
+            device=DEVICE,
+            temp_range=[0.05],
+        )
 
 
     logger.info("\nGetting Model Accuracy")
@@ -325,6 +329,7 @@ def main(config_fname):
     base_model_trainer.unet_classifier_train_loop(
         unet_filename=base_unet_final_fname,
         classifier_filename=base_classifier_final_fname,
+        batch_size=BATCH_SIZE,
         device=DEVICE,
     )
 
@@ -338,6 +343,7 @@ def main(config_fname):
     mixed_model_trainer.unet_classifier_train_loop(
         unet_filename=mixed_unet_final_fname,
         classifier_filename=mixed_classifier_final_fname,
+        batch_size=BATCH_SIZE,
         device=DEVICE,
     )
 
@@ -351,6 +357,7 @@ def main(config_fname):
     contrast_model_trainer.unet_classifier_train_loop(
         unet_filename=contrast_unet_final_fname,
         classifier_filename=contrast_classifier_final_fname,
+        batch_size=BATCH_SIZE,
         device=DEVICE,
     )
 
