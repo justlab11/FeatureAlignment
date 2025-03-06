@@ -23,8 +23,11 @@ class HEIFFolder(Dataset):
         self.samples = []
         self.class_samples = {}
         
-        # Find all HEIC files recursively
-        for file_path in glob.glob(os.path.join(root, "**/*.heif"), recursive=True):
+        self._populate_samples()
+
+    def _populate_samples(self):
+        # Find all HEIF files recursively
+        for file_path in glob.glob(os.path.join(self.root, "**/*.heif"), recursive=True):
             # Extract class from directory path
             class_name = os.path.basename(os.path.dirname(file_path))
             
@@ -35,6 +38,14 @@ class HEIFFolder(Dataset):
             if class_name not in self.class_samples:
                 self.class_samples[class_name] = []
             self.class_samples[class_name].append(len(self.samples) - 1)
+
+    def update_samples(self, new_samples):
+        self.samples = new_samples
+        self.class_samples = {}
+        for idx, (_, class_name) in enumerate(self.samples):
+            if class_name not in self.class_samples:
+                self.class_samples[class_name] = []
+            self.class_samples[class_name].append(idx)
 
     def __len__(self):
         return len(self.samples)
@@ -199,30 +210,39 @@ class PairedMNISTDataset(Dataset):
             base_idx = idx
             label = self.base_labels[base_idx].item()
 
-        pair_selection = np.random.uniform()
-        if pair_selection < .7 or self.unique_sources:
-            base_sample = self.base_images[base_idx]
-            if self.specific_class is not None:
-                aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
-            else:
-                aux_idx = np.random.choice(self.aux_indices_by_class[label])
-            aux_sample = self.aux_images[aux_idx]
-        elif pair_selection < .85:
-            base_sample = self.base_images[base_idx]
-            if self.specific_class is not None:
-                aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
-            else:
-                aux_idx = np.random.choice(self.base_indices_by_class[label])
-            aux_sample = self.base_images[aux_idx]
+        base_sample = self.base_images[base_idx]
+
+        if self.specific_class is not None:
+            aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
         else:
-            if self.specific_class is not None:
-                aux_idx1 = np.random.choice(self.aux_indices_by_class[self.specific_class])
-                aux_idx2 = np.random.choice(self.aux_indices_by_class[self.specific_class])
-            else:
-                aux_idx1 = np.random.choice(self.aux_indices_by_class[label])
-                aux_idx2 = np.random.choice(self.aux_indices_by_class[label])
-            base_sample = self.aux_images[aux_idx1]
-            aux_sample = self.aux_images[aux_idx2]
+            aux_idx = np.random.choice(self.aux_indices_by_class[label])
+
+        aux_sample = self.aux_images[aux_idx]
+
+        # pair_selection = np.random.uniform()
+        # if pair_selection < .7 or self.unique_sources:
+        #     base_sample = self.base_images[base_idx]
+        #     if self.specific_class is not None:
+        #         aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx = np.random.choice(self.aux_indices_by_class[label])
+        #     aux_sample = self.aux_images[aux_idx]
+        # elif pair_selection < .85:
+        #     base_sample = self.base_images[base_idx]
+        #     if self.specific_class is not None:
+        #         aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx = np.random.choice(self.base_indices_by_class[label])
+        #     aux_sample = self.base_images[aux_idx]
+        # else:
+        #     if self.specific_class is not None:
+        #         aux_idx1 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #         aux_idx2 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx1 = np.random.choice(self.aux_indices_by_class[label])
+        #         aux_idx2 = np.random.choice(self.aux_indices_by_class[label])
+        #     base_sample = self.aux_images[aux_idx1]
+        #     aux_sample = self.aux_images[aux_idx2]
 
         return base_sample, aux_sample, label
 

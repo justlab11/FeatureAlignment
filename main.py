@@ -326,7 +326,6 @@ def main(config_fname):
         unet_filename=base_unet_final_fname,
         classifier_filename=base_classifier_final_fname,
         device=DEVICE,
-        mode="as"
     )
 
 
@@ -340,7 +339,6 @@ def main(config_fname):
         unet_filename=mixed_unet_final_fname,
         classifier_filename=mixed_classifier_final_fname,
         device=DEVICE,
-        mode="sa"
     )
 
 
@@ -354,7 +352,6 @@ def main(config_fname):
         unet_filename=contrast_unet_final_fname,
         classifier_filename=contrast_classifier_final_fname,
         device=DEVICE,
-        mode="asd"
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")

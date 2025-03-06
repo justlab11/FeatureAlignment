@@ -8,8 +8,8 @@ import logging
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
 
 from models import DynamicCNN
-from helpers import EarlyStopper
 from losses import supervised_contrastive_loss, ISEBSW
+from datasets import CombinedDataset, HEIFFolder
 from type_defs import DataLoaderSet
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ class Trainer:
 
         self.unet.load_state_dict(torch.load(filename, weights_only=True))
 
-    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, unet_epochs=100, classifier_epochs=50):
+    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=100, classifier_epochs=50):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
             lr = 3e-3,
@@ -220,6 +220,30 @@ class Trainer:
 
         # Load best U-Net model
         self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
+
+        train_ds = self._adjust_aux_dataset(
+            dataloader=self.train_loader,
+            classifier=self.classifier,
+            unet=self.unet,
+            batch_size=batch_size,
+            device=device
+        )
+
+        val_ds = self._adjust_aux_dataset(
+            dataloader=self.val_loader,
+            classifier=self.classifier,
+            unet=self.unet,
+            batch_size=batch_size,
+            device=device
+        )
+
+        self.train_loader = torch.utils.data.DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
+        )
+
+        self.val_loader = torch.utils.data.DataLoader(
+            val_ds, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True
+        )
 
         classifier_optimizer = optim.Adam(
             self.classifier.parameters(),
@@ -594,6 +618,64 @@ class Trainer:
         epoch_loss = running_loss / len(dataloader)
         
         return epoch_loss
+    
+    def _adjust_aux_dataset(self, dataloader, classifier, unet, device, batch_size):
+        classifier.to(device)
+        unet.to(device)
+
+        classifier.eval()
+        unet.eval()
+
+        dataset: CombinedDataset = dataloader.dataset
+        aux_dataset = dataset.aux_dataset
+
+        init_len = len(aux_dataset)
+
+        aux_dataloader = DataLoader(
+            aux_dataset,
+            batch_size=batch_size,
+            shuffle=False
+        )
+
+        indices_to_remove = []
+
+        for batch_idx, (aux_samples, labels) in enumerate(aux_dataloader):
+            aux_samples, labels = aux_samples.to(device), labels.to(device)
+            labels.long()
+
+            with torch.no_grad():
+                outputs = classifier(aux_samples)
+                _, predicted = torch.max(outputs, 1)
+
+                # Compare predictions with labels
+                misclassified = (predicted != labels)
+                
+                # Get the indices of misclassified samples
+                misclassified_indices = misclassified.nonzero().squeeze().cpu().numpy()
+                
+                # Adjust indices to global dataset indices
+                global_indices = misclassified_indices + batch_idx * batch_size
+                
+                indices_to_remove.extend(global_indices.tolist())
+
+        # Remove the misclassified samples from the auxiliary dataset
+        new_samples = [sample for idx, sample in enumerate(aux_dataset.samples) if idx not in indices_to_remove]
+        
+        # Update the auxiliary dataset
+        aux_dataset.update_samples(new_samples)
+
+        final_len = len(aux_dataset)
+
+        # Update the CombinedDataset
+        dataset.aux_class_samples = aux_dataset.class_samples
+        dataset.aux_file_paths = [sample[0] for sample in aux_dataset.samples]
+
+        removed_len = init_len - final_len
+
+        logger.info(f"Removed {removed_len} ({round(removed_len/init_len*100, 2)}%) samples from the auxiliary dataset.")
+
+        return dataset              
+                
 
     def reset_parameters(self, model):
         for layer in model.children():
@@ -906,4 +988,3 @@ class PreloaderTrainer:
         epoch_accuracy = correct / total
         
         return epoch_loss, epoch_accuracy
-
