@@ -161,12 +161,65 @@ class Trainer:
 
         self.unet.load_state_dict(torch.load(filename, weights_only=True))
 
-    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, num_epochs=100):
+    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, mode, unet_epochs=100, classifier_epochs=50):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
             lr = 3e-3,
             weight_decay = 1e-5
         )
+
+        unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=unet_epochs, eta_min=1e-6)
+
+        best_unet_val_loss = float('inf')
+        best_classifier_val_loss = float('inf')
+
+        # Phase 1: U-Net Training
+        logger.info("Warm Starting UNET Model")
+        for ws_epoch in range(20):
+            _ = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+
+        logger.info("Starting UNET Model Training")
+        for epoch in range(unet_epochs):
+            train_loss = self._unet_run(
+                unet_model=self.unet,
+                classifier=self.classifier,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+
+            unet_scheduler.step()
+
+            # Validate U-Net
+            with torch.no_grad():
+                val_loss = self._unet_run(
+                    unet_model=self.unet,
+                    classifier=self.classifier,
+                    optimizer=None,
+                    dataloader=self.val_loader,
+                    device=device,
+                    train=False
+                )
+
+            log_message = f"U-Net Epoch {epoch+1}/{unet_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+
+            if val_loss < best_unet_val_loss:
+                log_message += " <- New Best"
+                best_unet_val_loss = val_loss
+                torch.save(self.unet.state_dict(), unet_filename)
+
+            logger.info(log_message)
+
+        # Load best U-Net model
+        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
 
         classifier_optimizer = optim.Adam(
             self.classifier.parameters(),
@@ -174,34 +227,15 @@ class Trainer:
             weight_decay = 1e-5
         )
 
-        best_val_loss = 1e7
+        classifier_scheduler = CosineAnnealingLR(classifier_optimizer, T_max=classifier_epochs, eta_min=1e-8)
 
-        for ws_epoch in range(10):
-            _ = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-
-        for epoch in range(num_epochs):
-            # train unet once
-            _ = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-            
+        # Phase 2: Classifier Head Fine-tuning
+        logger.info("Starting Classifier Head Fine-tuning")
+        for epoch in range(classifier_epochs):
             self.classifier.set_freeze_head(False)
             self.classifier.set_freeze_body(True)
 
-            # train classifier once
-            _, _ = self._classification_run(
+            train_loss, _ = self._classification_run(
                 model = self.classifier,
                 unet_model = self.unet,
                 optimizer = classifier_optimizer,
@@ -211,7 +245,7 @@ class Trainer:
                 train=True
             )
 
-            # cosine_scheduler.step()
+            classifier_scheduler.step()
 
             classifier_val_loss, classifier_val_acc = self._classification_run(
                 model=self.classifier,
@@ -223,19 +257,17 @@ class Trainer:
                 train=False,
             )
 
-            log_message = f"\tEpoch {epoch+1}: {classifier_val_loss:.4f} {classifier_val_acc*100:.2f}"
+            log_message = f"Classifier Epoch {epoch+1}/{classifier_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {classifier_val_loss:.4f}, Val Acc: {classifier_val_acc*100:.2f}%"
 
-            if classifier_val_loss < best_val_loss:
+            if classifier_val_loss < best_classifier_val_loss:
                 log_message += " <- New Best"
-                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
-                best_val_loss = classifier_val_loss
+                best_classifier_val_loss = classifier_val_loss
                 torch.save(self.classifier.state_dict(), classifier_filename)
-                torch.save(self.unet.state_dict(), unet_filename)
 
             logger.info(log_message)
 
+        # Load best classifier model
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
-        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
 
     def unet_contrastive_train_loop(self, classifier_filename, unet_filename, device, num_epochs=100, best_temp=0.05):
         unet_optimizer = optim.Adam(
