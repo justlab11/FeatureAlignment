@@ -161,7 +161,7 @@ class Trainer:
 
         self.unet.load_state_dict(torch.load(filename, weights_only=True))
 
-    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=100, classifier_epochs=50):
+    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=1, classifier_epochs=50):
         unet_optimizer = optim.Adam(
             self.unet.parameters(),
             lr = 3e-3,
@@ -264,7 +264,7 @@ class Trainer:
                 unet_model = self.unet,
                 optimizer = classifier_optimizer,
                 dataloader = self.train_loader,
-                mode = mode,
+                mode = "sa",
                 device = device,
                 train=True
             )
@@ -626,7 +626,7 @@ class Trainer:
         classifier.eval()
         unet.eval()
 
-        dataset: CombinedDataset = dataloader.dataset
+        dataset: CombinedDataset = dataloader.dataset.dataset
         aux_dataset = dataset.aux_dataset
 
         init_len = len(aux_dataset)
@@ -640,11 +640,12 @@ class Trainer:
         indices_to_remove = []
 
         for batch_idx, (aux_samples, labels) in enumerate(aux_dataloader):
-            aux_samples, labels = aux_samples.to(device), labels.to(device)
-            labels.long()
+            labels = labels.long()
+            aux_samples = aux_samples.to(device)
+            labels = labels.to(device)
 
             with torch.no_grad():
-                outputs = classifier(aux_samples)
+                outputs = classifier(aux_samples)[-1]
                 _, predicted = torch.max(outputs, 1)
 
                 # Compare predictions with labels

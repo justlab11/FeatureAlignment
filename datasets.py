@@ -60,6 +60,8 @@ class HEIFFolder(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         
+        label = float(label)
+
         return image, label
 
     def get_class_samples(self):
