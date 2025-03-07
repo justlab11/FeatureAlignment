@@ -20,11 +20,11 @@ save_locations:
 
 classifier:
   model: "resnet9"
-  identifier: "MNIST+TextureMNIST_V2" # unique identifier for the set of models
+  identifier: "MNIST+TextureMNIST" # unique identifier for the set of models
   num_epochs: 100
 
 unet:
   loss: "ebsw"
   num_epochs: 70
 
-verbose: true
+verbose: false

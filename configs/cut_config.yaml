@@ -28,4 +28,4 @@ unet:
   loss: "ebsw"
   num_epochs: 70
 
-verbose: true
+verbose: false

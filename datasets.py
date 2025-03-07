@@ -59,8 +59,6 @@ class HEIFFolder(Dataset):
         # Apply transform if provided
         if self.transform is not None:
             image = self.transform(image)
-        
-        label = float(label)
 
         return image, label
 

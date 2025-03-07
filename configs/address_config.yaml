@@ -1,11 +1,11 @@
 dataset:
-  target_name: "none"
+  target_name: "mnist"
   target_folder: "data/mnist_v2"
 
   # aux_name: "texture"
   # aux_folder: "data/texture_mnist_32"
 
-  aux_name: "address"
+  aux_name: "svhn"
   aux_folder: "data/house_mnist_32"
 
   rng_seed: 72
@@ -20,7 +20,7 @@ save_locations:
 
 classifier:
   model: "resnet9"
-  identifier: "MNIST+AddressMNIST" # unique identifier for the set of models
+  identifier: "MNIST+SVHN" # unique identifier for the set of models
   num_epochs: 100
 
 
@@ -28,4 +28,4 @@ unet:
   loss: "ebsw"
   num_epochs: 70
 
-verbose: true
+verbose: false
