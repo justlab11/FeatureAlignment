@@ -473,10 +473,10 @@ class Trainer:
         correct = 0
         total = 0
 
-        if mode == "base_only":
-            dataloader.dataset.dataset.unique_sources = True 
-        else:
-            dataloader.dataset.dataset.unique_sources = True
+        # if mode == "base_only":
+        #     dataloader.dataset.dataset.unique_sources = True 
+        # else:
+        #     dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()

@@ -3,7 +3,7 @@ import torchvision
 import torch.nn as nn
 import torch.optim as optim
 from torchvision.models import resnet18
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split as tts
@@ -68,10 +68,10 @@ class HEIFFolder(Dataset):
         return self.class_samples
     
 class CombinedDataset(Dataset):
-    def __init__(self, base_dataset, aux_dataset):
-        self.base_dataset = base_dataset
-        self.aux_dataset = aux_dataset
-        self.unique_sources = False
+    def __init__(self, base_dataset: Subset, aux_dataset: Subset):
+        self.base_dataset = base_dataset.dataset
+        self.aux_dataset = aux_dataset.dataset
+        self.unique_sources = True
         
         # Get class samples from both datasets
         self.base_class_samples = base_dataset.class_samples
