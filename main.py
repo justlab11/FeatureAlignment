@@ -75,30 +75,57 @@ def main(config_fname):
     ])
 
 
-    target_full_dataset = datasets.HEIFFolder(target_dir, transform=transform)
-    aux_full_dataset = datasets.HEIFFolder(aux_dir, transform=transform)
-
-    combined_dataset = datasets.CombinedDataset(
-        base_dataset=target_full_dataset,
-        aux_dataset=aux_full_dataset
-    )
-
-    train_size = int(.02 * len(combined_dataset))
-    val_size = int(.01 * len(combined_dataset))
-    test_size = len(combined_dataset) - train_size - val_size
-
     split_gen = torch.Generator()
     split_gen.manual_seed(CONFIG.dataset.rng_seed)
 
-    train_ds, test_ds, val_ds = torch.utils.data.random_split(
-        combined_dataset,
+    target_full_dataset = datasets.HEIFFolder(target_dir, transform=transform)
+
+    train_size = 1000
+    val_size = train_size * 2
+    test_size = len(target_full_dataset) - train_size - val_size
+
+    target_train_ds, target_test_ds, target_val_ds = torch.utils.data.random_split(
+        target_full_dataset,
         [train_size, test_size, val_size],
         generator=split_gen
     )
 
-    logger.info(f"\tTrain Dataset Size: {len(train_ds)}")
-    logger.info(f"\tTest Dataset Size: {len(test_ds)}")
-    logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)}")
+    aux_full_dataset = datasets.HEIFFolder(aux_dir, transform=transform)
+
+    train_size = 2000
+    val_size = train_size * 2
+    test_size = len(aux_full_dataset) - train_size - val_size
+
+    aux_train_ds, aux_test_ds, aux_val_ds = torch.utils.data.random_split(
+        aux_full_dataset,
+        [train_size, test_size, val_size],
+        generator=split_gen
+    )
+
+    train_ds = datasets.CombinedDataset(
+        base_dataset=target_train_ds,
+        aux_dataset=aux_train_ds
+    )
+
+    test_ds = datasets.CombinedDataset(
+        base_dataset=target_test_ds,
+        aux_dataset=aux_test_ds
+    )
+
+    val_ds = datasets.CombinedDataset(
+        base_dataset=target_val_ds,
+        aux_dataset=aux_val_ds
+    )
+
+    # train_ds, test_ds, val_ds = torch.utils.data.random_split(
+    #     combined_dataset,
+    #     [train_size, test_size, val_size],
+    #     generator=split_gen
+    # )
+
+    logger.info(f"\tTrain Dataset Size: {len(train_ds)} (Target: {len(target_train_ds)}, Aux: {len(aux_train_ds)})")
+    logger.info(f"\tTest Dataset Size: {len(test_ds)} (Target: {len(target_test_ds)}, Aux: {len(aux_test_ds)})")
+    logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Aux: {len(aux_val_ds)})")
 
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True

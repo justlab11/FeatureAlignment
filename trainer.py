@@ -626,7 +626,7 @@ class Trainer:
         classifier.eval()
         unet.eval()
 
-        dataset: CombinedDataset = dataloader.dataset.dataset
+        dataset: CombinedDataset = dataloader.dataset
         aux_dataset = dataset.aux_dataset
 
         init_len = len(aux_dataset)
