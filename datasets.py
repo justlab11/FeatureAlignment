@@ -66,74 +66,79 @@ class HEIFFolder(Dataset):
 
     def get_class_samples(self):
         return self.class_samples
-    
+
+class IndexedDataset(Dataset):
+    def __init__(self, base_dataset, indices=None):
+        self.base_dataset = base_dataset
+        self.indices = indices if indices is not None else list(range(len(base_dataset)))
+        self.class_samples = self._build_class_samples()
+        self.file_paths = [self.base_dataset.samples[i][0] for i in self.indices]
+
+    def _build_class_samples(self):
+        class_samples = {}
+        for idx, original_idx in enumerate(self.indices):
+            _, label = self.base_dataset.samples[original_idx]
+            if label not in class_samples:
+                class_samples[label] = []
+            class_samples[label].append(idx)
+        return class_samples
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        return self.base_dataset[self.indices[idx]]
+
+    def get_file_path(self, idx):
+        return self.file_paths[idx]
+
 class CombinedDataset(Dataset):
-    def __init__(self, base_dataset: Subset, aux_dataset: Subset):
-        self.base_dataset = base_dataset.dataset
-        self.aux_dataset = aux_dataset.dataset
+    def __init__(self, base_dataset: IndexedDataset, aux_dataset: IndexedDataset):
+        self.base_dataset = base_dataset
+        self.aux_dataset = aux_dataset
         self.unique_sources = True
-        
-        # Get class samples from both datasets
-        self.base_class_samples = base_dataset.class_samples
-        self.aux_class_samples = aux_dataset.class_samples
-        
-        # Store file paths for base and aux datasets
-        self.base_file_paths = [self.base_dataset.samples[i][0] for i in range(len(self.base_dataset))]
-        self.aux_file_paths = [self.aux_dataset.samples[i][0] for i in range(len(self.aux_dataset))]
 
     def __len__(self):
         return len(self.base_dataset)
-    
-    def toggle_unique_sources(self, value:bool):
-        self.unique_sources = value
 
     def __getitem__(self, index):
-        base_file_path = self.base_file_paths[index]
+        base_file_path = self.base_dataset.get_file_path(index)
         base_image = Image.open(base_file_path)
         
-        # Apply transform if provided
-        if self.base_dataset.transform is not None:
-            base_image = self.base_dataset.transform(base_image)
+        if self.base_dataset.base_dataset.transform is not None:
+            base_image = self.base_dataset.base_dataset.transform(base_image)
         
-        label = self.base_dataset.samples[index][1]
+        label = self.base_dataset.base_dataset.samples[self.base_dataset.indices[index]][1]
         
         pair_selection = np.random.uniform()
         
         if self.unique_sources or pair_selection < 0.5:
-            # print(True, pair_selection, self.unique_sources)
-            # Ensure base and aux are from different sources
-            aux_idx = np.random.choice(self.aux_class_samples[label])
-            aux_file_path = self.aux_file_paths[aux_idx]
+            aux_idx = np.random.choice(self.aux_dataset.class_samples[label])
+            aux_file_path = self.aux_dataset.get_file_path(aux_idx)
             aux_image = Image.open(aux_file_path)
             
-            # Apply transform if provided
-            if self.aux_dataset.transform is not None:
-                aux_image = self.aux_dataset.transform(aux_image)
+            if self.aux_dataset.base_dataset.transform is not None:
+                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
         elif pair_selection < 0.75:
-            # Base/Base pair
-            base_idx = np.random.choice(self.base_class_samples[label])
-            aux_file_path = self.base_file_paths[base_idx]
+            base_idx = np.random.choice(self.base_dataset.class_samples[label])
+            aux_file_path = self.base_dataset.get_file_path(base_idx)
             aux_image = Image.open(aux_file_path)
             
-            # Apply transform if provided
-            if self.base_dataset.transform is not None:
-                aux_image = self.base_dataset.transform(aux_image)
+            if self.base_dataset.base_dataset.transform is not None:
+                aux_image = self.base_dataset.base_dataset.transform(aux_image)
         else:
-            # Aux/Aux pair
-            aux_idx1 = np.random.choice(self.aux_class_samples[label])
-            aux_idx2 = np.random.choice(self.aux_class_samples[label])
-            base_file_path = self.aux_file_paths[aux_idx1]
-            aux_file_path = self.aux_file_paths[aux_idx2]
+            aux_idx1 = np.random.choice(self.aux_dataset.class_samples[label])
+            aux_idx2 = np.random.choice(self.aux_dataset.class_samples[label])
+            base_file_path = self.aux_dataset.get_file_path(aux_idx1)
+            aux_file_path = self.aux_dataset.get_file_path(aux_idx2)
             base_image = Image.open(base_file_path)
             
-            # Apply transform if provided
-            if self.aux_dataset.transform is not None:
-                base_image = self.aux_dataset.transform(base_image)
+            if self.aux_dataset.base_dataset.transform is not None:
+                base_image = self.aux_dataset.base_dataset.transform(base_image)
             aux_image = Image.open(aux_file_path)
             
-            # Apply transform if provided
-            if self.aux_dataset.transform is not None:
-                aux_image = self.aux_dataset.transform(aux_image)
+            if self.aux_dataset.base_dataset.transform is not None:
+                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
         
         label = float(label)
 

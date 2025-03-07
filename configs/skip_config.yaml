@@ -8,7 +8,7 @@ dataset:
   aux_name: "MNIST_Gaps"
   aux_folder: "data/mnist_skip_32"
 
-  rng_seed: 72
+  rng_seed: 42
   batch_size: 64
   base_sample_ratio: .1 # .2 means 20% of all train samples go to base
 

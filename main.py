@@ -74,33 +74,59 @@ def main(config_fname):
         # transforms.Normalize((0.1307,), (0.3081,))  # MNIST standard normalization
     ])
 
-
-    split_gen = torch.Generator()
-    split_gen.manual_seed(CONFIG.dataset.rng_seed)
-
     target_full_dataset = datasets.HEIFFolder(target_dir, transform=transform)
+    target_inds = np.arange(len(target_full_dataset))
+    np.random.shuffle(target_inds)
 
-    train_size = 1000
-    val_size = train_size * 2
-    test_size = len(target_full_dataset) - train_size - val_size
+    target_train_size = 1000
+    target_val_size = target_train_size * 2
 
-    target_train_ds, target_test_ds, target_val_ds = torch.utils.data.random_split(
-        target_full_dataset,
-        [train_size, test_size, val_size],
-        generator=split_gen
-    )
+    target_train_inds = target_inds[:target_train_size]
+    target_val_inds = target_inds[target_train_size:target_train_size+target_val_size]
+    target_test_inds = target_inds[target_train_size+target_val_size:]
 
     aux_full_dataset = datasets.HEIFFolder(aux_dir, transform=transform)
+    aux_inds = np.arange(len(aux_full_dataset))
+    np.random.shuffle(aux_inds)
 
-    train_size = 2000
-    val_size = train_size * 2
-    test_size = len(aux_full_dataset) - train_size - val_size
+    aux_train_size = 1000
+    aux_val_size = aux_train_size * 2
 
-    aux_train_ds, aux_test_ds, aux_val_ds = torch.utils.data.random_split(
-        aux_full_dataset,
-        [train_size, test_size, val_size],
-        generator=split_gen
-    )
+    aux_train_inds = aux_inds[:aux_train_size]
+    aux_val_inds = aux_inds[aux_train_size:aux_train_size+aux_val_size]
+    aux_test_inds = aux_inds[aux_train_size+aux_val_size:]
+
+    target_train_ds = datasets.IndexedDataset(target_full_dataset, target_train_inds)
+    target_test_ds = datasets.IndexedDataset(target_full_dataset, target_test_inds)
+    target_val_ds = datasets.IndexedDataset(target_full_dataset, target_val_inds)
+
+    aux_train_ds = datasets.IndexedDataset(aux_full_dataset, aux_train_inds)
+    aux_test_ds = datasets.IndexedDataset(aux_full_dataset, aux_test_inds)
+    aux_val_ds = datasets.IndexedDataset(aux_full_dataset, aux_val_inds)
+    
+
+    # split_gen = torch.Generator()
+    # split_gen.manual_seed(CONFIG.dataset.rng_seed)
+
+    # target_full_dataset = datasets.HEIFFolder(target_dir, transform=transform)
+
+    # target_train_ds, target_test_ds, target_val_ds = torch.utils.data.random_split(
+    #     target_full_dataset,
+    #     [train_size, test_size, val_size],
+    #     generator=split_gen
+    # )
+
+    # aux_full_dataset = datasets.HEIFFolder(aux_dir, transform=transform)
+
+    # train_size = 2000
+    # val_size = train_size * 2
+    # test_size = len(aux_full_dataset) - train_size - val_size
+
+    # aux_train_ds, aux_test_ds, aux_val_ds = torch.utils.data.random_split(
+    #     aux_full_dataset,
+    #     [train_size, test_size, val_size],
+    #     generator=split_gen
+    # )
 
     train_ds = datasets.CombinedDataset(
         base_dataset=target_train_ds,

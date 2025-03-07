@@ -9,7 +9,7 @@ from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealin
 
 from models import DynamicCNN
 from losses import supervised_contrastive_loss, ISEBSW
-from datasets import CombinedDataset, HEIFFolder
+from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
 
 logger = logging.getLogger(__name__)
@@ -637,7 +637,7 @@ class Trainer:
             shuffle=False
         )
 
-        indices_to_remove = []
+        indices_to_keep = []
 
         for batch_idx, (aux_samples, labels) in enumerate(aux_dataloader):
             labels = labels.long()
@@ -649,33 +649,29 @@ class Trainer:
                 _, predicted = torch.max(outputs, 1)
 
                 # Compare predictions with labels
-                misclassified = (predicted != labels)
+                correctly_classified = (predicted == labels)
                 
-                # Get the indices of misclassified samples
-                misclassified_indices = misclassified.nonzero().squeeze().cpu().numpy()
+                # Get the indices of correctly classified samples
+                correct_indices = correctly_classified.nonzero().squeeze().cpu().numpy()
                 
                 # Adjust indices to global dataset indices
-                global_indices = misclassified_indices + batch_idx * batch_size
+                global_indices = correct_indices + batch_idx * batch_size
                 
-                indices_to_remove.extend(global_indices.tolist())
+                indices_to_keep.extend(global_indices.tolist())
 
-        # Remove the misclassified samples from the auxiliary dataset
-        new_samples = [sample for idx, sample in enumerate(aux_dataset.samples) if idx not in indices_to_remove]
-        
-        # Update the auxiliary dataset
-        aux_dataset.update_samples(new_samples)
+        # Create a new IndexedDataset with only the correctly classified samples
+        new_aux_dataset = IndexedDataset(aux_dataset.base_dataset, [aux_dataset.indices[i] for i in indices_to_keep])
 
-        final_len = len(aux_dataset)
+        final_len = len(new_aux_dataset)
 
         # Update the CombinedDataset
-        dataset.aux_class_samples = aux_dataset.class_samples
-        dataset.aux_file_paths = [sample[0] for sample in aux_dataset.samples]
+        dataset.aux_dataset = new_aux_dataset
 
         removed_len = init_len - final_len
 
         logger.info(f"Removed {removed_len} ({round(removed_len/init_len*100, 2)}%) samples from the auxiliary dataset.")
 
-        return dataset              
+        return dataset
                 
 
     def reset_parameters(self, model):
