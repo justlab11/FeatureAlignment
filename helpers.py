@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 
 
 from losses import supervised_contrastive_loss, SlicedWasserstein, DSW, ISEBSW
-from models import ProjNet, DynamicCNN
+from models import ProjNet, SmallCustomUNET, LargeCustomUNET
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, unet
     return class_loss, class_hist
 
 class EarlyStopper:
-    def __init__(self, patience=5, min_delta=0):
+    def __init__(self, patience:int=5, min_delta:float=0):
         """
         Initialize the EarlyStopper.
 
@@ -170,7 +170,24 @@ class EarlyStopper:
 
         return self.early_stop
 
-def load_yaml(file_path):
+def load_yaml(file_path:str):
     with open(file_path, "r") as file:
         data = yaml.safe_load(file)
     return data
+
+def make_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8):
+    def unet():
+        if size == "small":
+            model = SmallCustomUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+        elif size == "large":
+            model = LargeCustomUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+
+        return model
+    
+    return unet

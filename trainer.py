@@ -15,6 +15,13 @@ from type_defs import DataLoaderSet
 logger = logging.getLogger(__name__)
 
 class Trainer:
+    """
+    The trainer is an all inclusive model trainer for this work. It's quite long, but here are all of the functions with their use case:
+    * classification_train_loop - trains the classifier provided on the the dataset provided using CE for improving classification accuracy
+    * evaluate_model - inferences the model on the validation set to get accuracy
+    * unet_train_loop - the train loop to train the unet architecture to get source closer to target
+    * unet_classifier_loop - the full loop to go from unet train to classifier retrain
+    """
     def __init__(self, classifier, dataloaders: DataLoaderSet, unet=None, 
                  contrastive=False, classifier_load_path=None, unet_load_path=None):
         
@@ -415,7 +422,7 @@ class Trainer:
         return epoch_loss
 
 
-    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=200, best_temp=None):
+    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=100, best_temp=None):
         # Step 1: Optimize temperature and train body
         if best_temp == None:
             best_temp, best_val_loss = self._optimize_temperature(temp_range, num_epochs, device, filename)

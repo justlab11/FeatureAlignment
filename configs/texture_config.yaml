@@ -1,16 +1,19 @@
 dataset:
-  target_name: "mnist"
-  target_folder: "data/mnist_v2"
+  target:
+    name: "MNIST"
+    folder: "data/mnist_v2"
+    train_size: 1000
+    val_size: 3000
 
-  # aux_name: "texture"
-  # aux_folder: "data/texture_mnist_32"
+  source:
+    name: "texture_mnist"
+    folder: "data/texture_mnist_32"
+    train_size: 69000
+    val_size: 500
 
-  aux_name: "texture_mnist"
-  aux_folder: "data/texture_mnist_32"
-
+  image_size: "small"
   rng_seed: 72
   batch_size: 64
-  base_sample_ratio: .1 # .2 means 20% of all train samples go to base
 
 save_locations:
   model_folder: "models"
@@ -25,6 +28,10 @@ classifier:
 
 unet:
   loss: "ebsw"
-  num_epochs: 70
+  attention: false
+  base_channels: 32
+  noise_channels: 8
+  num_warm_start_epochs: 20
+  num_epochs: 100
 
 verbose: false

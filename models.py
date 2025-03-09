@@ -509,34 +509,146 @@ class DynamicResNet(nn.Module):
         return len(list(self.model.children()))
 
     
-class CustomUNET(nn.Module):
-    def __init__(self):
-        super(CustomUNET, self).__init__()
+class SmallCustomUNET(nn.Module):
+    def __init__(self, base_channels=32, noise_channels=8):
+        super(SmallCustomUNET, self).__init__()
         
+        self.base_channels = base_channels
+        self.noise_channels = noise_channels
+
         # Encoder
-        self.enc1 = self.conv_block(3, 32)
-        self.enc2 = self.conv_block(32, 64)
-        self.enc3 = self.conv_block(64, 128)
-        self.enc4 = self.conv_block(128, 256)
-        self.enc5 = self.conv_block(256, 512)
+        self.enc1 = self.conv_block(3, base_channels)
+        self.enc2 = self.conv_block(base_channels, base_channels * 2)
+        self.enc3 = self.conv_block(base_channels * 2, base_channels * 4)
+        self.enc4 = self.conv_block(base_channels * 4, base_channels * 8)
+        self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
-        self.latent_norm = nn.LayerNorm([512, 2, 2])
+        # Latent space normalization
+        self.latent_norm = nn.LayerNorm([base_channels * 16, 2, 2])  # For latent space (2x2 for 32x32 input)
 
-        self.noise_conv = nn.Conv1d(8, 512, kernel_size=1)
+        # Noise addition
+        self.noise_conv = nn.Conv1d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
         self.noise_weight = nn.Parameter(torch.tensor(0.05))
         self.latent_weight = nn.Parameter(torch.tensor(1.0))
         
         # Decoder
-        self.dec4 = self.conv_block(768, 256)
-        self.dec3 = self.conv_block(384, 128)
-        self.dec2 = self.conv_block(192, 64)
-        self.dec1 = self.conv_block(96, 32)
+        self.dec4 = self.conv_block(base_channels * (16 + 8), base_channels * 8)
+        self.dec3 = self.conv_block(base_channels * (8 + 4), base_channels * 4)
+        self.dec2 = self.conv_block(base_channels * (4 + 2), base_channels * 2)
+        self.dec1 = self.conv_block(base_channels * (2 + 1), base_channels)
         
-        self.final = nn.Conv2d(32, 3, kernel_size=1)
+        # Final output layer
+        self.final = nn.Conv2d(base_channels, 3, kernel_size=1)
         
+        # Pooling and Upsampling layers
         self.pool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def conv_block(self, in_ch, out_ch):
+        """A helper function to create a convolutional block."""
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+    
+    def get_normalized_weights(self):
+        """Normalize noise and latent weights for blending."""
+        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
+        return (
+            self.noise_weight.abs() / sum_weights,
+            self.latent_weight.abs() / sum_weights,
+        )
+
+    def forward(self, x):
+        layer_outputs = []
+
+        # Encoder
+        e1 = self.enc1(x)  
+        layer_outputs.append(e1)
+
+        e2 = self.enc2(self.pool(e1))  
+        layer_outputs.append(e2)
+
+        e3 = self.enc3(self.pool(e2))  
+        layer_outputs.append(e3)
+
+        e4 = self.enc4(self.pool(e3))  
+        layer_outputs.append(e4)
+
+        e5 = self.enc5(self.pool(e4))  
+        layer_outputs.append(e5)  # Latent representation
+
+        # Latent space normalization and noise addition
+        e5_normalized = self.latent_norm(e5)
+
+        noise = torch.randn(e5.size(0), self.noise_channels, e5.size(2) * e5.size(3), device=e5.device)  
         
+        # Transform noise to match latent space dimensions
+        noise_transformed = self.noise_conv(noise).view_as(e5)
+
+        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
+
+        e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
+        e5_blended = self.latent_norm(e5_blended)  # Re-normalize after blending
+
+        # Decoder
+        d4 = self.dec4(torch.cat([self.upsample(e5_blended), e4], dim=1))
+        layer_outputs.append(d4)
+
+        d3 = self.dec3(torch.cat([self.upsample(d4), e3], dim=1))
+        layer_outputs.append(d3)
+
+        d2 = self.dec2(torch.cat([self.upsample(d3), e2], dim=1))
+        layer_outputs.append(d2)
+
+        d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
+        layer_outputs.append(d1)
+
+        final_output = self.final(d1)
+        layer_outputs.append(final_output)
+
+        return layer_outputs
+    
+class LargeCustomUNET(nn.Module):
+    """
+    Expects images of size 224x224
+    """
+    def __init__(self, base_channels=32, noise_channels=8):
+        super(LargeCustomUNET, self).__init__()
+        
+        self.base_channels = base_channels
+        self.noise_channels = noise_channels
+
+        # Encoder
+        self.enc1 = self.conv_block(3, base_channels)
+        self.enc2 = self.conv_block(base_channels, base_channels * 2)
+        self.enc3 = self.conv_block(base_channels * 2, base_channels * 4)
+        self.enc4 = self.conv_block(base_channels * 4, base_channels * 8)
+        self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
+
+        # Latent space normalization
+        self.latent_norm = nn.LayerNorm([base_channels * 16, 7, 7])  # Adjusted for latent space size (7x7 for 224x224 input)
+
+        # Noise addition
+        self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
+        self.noise_weight = nn.Parameter(torch.tensor(0.05))
+        self.latent_weight = nn.Parameter(torch.tensor(1.0))
+        
+        # Decoder
+        self.dec4 = self.conv_block(base_channels * (16 + 8), base_channels * 8)
+        self.dec3 = self.conv_block(base_channels * (8 + 4), base_channels * 4)
+        self.dec2 = self.conv_block(base_channels * (4 + 2), base_channels * 2)
+        self.dec1 = self.conv_block(base_channels * (2 + 1), base_channels)
+        
+        # Final output layer
+        self.final = nn.Conv2d(base_channels, 3, kernel_size=1)
+        
+        # Pooling and Upsampling layers
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
     def conv_block(self, in_ch, out_ch):
         return nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
@@ -547,9 +659,101 @@ class CustomUNET(nn.Module):
     
     def get_normalized_weights(self):
         sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
-        return self.noise_weight.abs()/sum_weights, self.latent_weight.abs()/sum_weights
+        return (
+            self.noise_weight.abs() / sum_weights,
+            self.latent_weight.abs() / sum_weights,
+        )
 
-    
+    def forward(self, x):
+        layer_outputs = []
+
+        # Encoder
+        e1 = self.enc1(x)  
+        layer_outputs.append(e1)
+
+        e2 = self.enc2(self.pool(e1))  
+        layer_outputs.append(e2)
+
+        e3 = self.enc3(self.pool(e2))  
+        layer_outputs.append(e3)
+
+        e4 = self.enc4(self.pool(e3))  
+        layer_outputs.append(e4)
+
+        e5 = self.enc5(self.pool(e4))  
+        
+        # Latent space normalization and noise addition
+        batch_size, channels, height, width = e5.shape
+
+        e5_normalized = e5.view(batch_size, channels, -1)  # Flatten spatial dimensions
+        e5_normalized = nn.LayerNorm(e5_normalized.size()[1:])(e5_normalized)  
+        e5_normalized = e5_normalized.view(batch_size, channels, height, width)  # Reshape back
+
+        noise = torch.randn(batch_size, self.noise_channels, height, width, device=e5.device)  
+        
+        # Transform noise to match latent space dimensions
+        noise_transformed = self.noise_conv(noise)
+
+        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
+
+        e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
+        e5_blended = e5_blended.view_as(e5)  # Ensure shape consistency if needed
+
+        layer_outputs.append(e5_blended)
+
+        # Decoder
+        d4 = self.dec4(torch.cat([self.upsample(e5_blended), e4], dim=1))
+        layer_outputs.append(d4)
+
+        d3 = self.dec3(torch.cat([self.upsample(d4), e3], dim=1))
+        layer_outputs.append(d3)
+
+        d2 = self.dec2(torch.cat([self.upsample(d3), e2], dim=1))
+        layer_outputs.append(d2)
+
+        d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
+        layer_outputs.append(d1)
+
+        final_output = self.final(d1)
+        layer_outputs.append(final_output)
+
+        return layer_outputs
+
+class CustomAutoencoder(nn.Module):
+    def __init__(self):
+        super(CustomAutoencoder, self).__init__()
+        
+        # Encoder
+        self.enc1 = self.conv_block(3, 32)
+        self.enc2 = self.conv_block(32, 64)
+        self.enc3 = self.conv_block(64, 128)
+        self.enc4 = self.conv_block(128, 256)
+        self.enc5 = self.conv_block(256, 512)
+
+        # Latent space normalization
+        self.latent_norm = nn.LayerNorm([512, 2, 2])
+
+        # Decoder
+        self.dec5 = self.conv_block(512, 256)
+        self.dec4 = self.conv_block(256, 128)
+        self.dec3 = self.conv_block(128, 64)
+        self.dec2 = self.conv_block(64, 32)
+        
+        # Final output layer
+        self.final = nn.Conv2d(32, 3, kernel_size=1)
+
+        # Pooling and upsampling layers
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def conv_block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
     def forward(self, x):
         layer_outputs = []
 
@@ -566,38 +770,28 @@ class CustomUNET(nn.Module):
         e4 = self.enc4(self.pool(e3))
         layer_outputs.append(e4)
 
-        e5 = self.enc5(self.pool(e4))  # This is the 2x2x512 latent space
+        e5 = self.enc5(self.pool(e4))  # This is the latent space (2x2x512)
         layer_outputs.append(e5)
 
-        # noise = torch.randn_like(e5)
-        # e5 = e5 * self.latent_weight + noise * self.noise_weight
-
+        # Normalize latent space
         e5_normalized = self.latent_norm(e5)
 
-        noise = torch.randn(e5.size(0), 8, 4, device=e5.device) # BATCH_SIZE x 2 x 2 x 8 fixed for torch
-        noise = self.noise_conv(noise).view_as(e5)
-
-        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
-
-        e5 = e5_normalized * norm_latent_weight + noise * norm_noise_weight
-        e5 = self.latent_norm(e5)
-
         # Decoder
-        d4 = self.dec4(torch.cat([self.upsample(e5), e4], dim=1))
+        d5 = self.dec5(self.upsample(e5_normalized))
+        layer_outputs.append(d5)
+
+        d4 = self.dec4(self.upsample(d5))
         layer_outputs.append(d4)
 
-        d3 = self.dec3(torch.cat([self.upsample(d4), e3], dim=1))
+        d3 = self.dec3(self.upsample(d4))
         layer_outputs.append(d3)
 
-        d2 = self.dec2(torch.cat([self.upsample(d3), e2], dim=1))
+        d2 = self.dec2(self.upsample(d3))
         layer_outputs.append(d2)
 
-        d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
-        layer_outputs.append(d1)
-
-        final = self.final(d1)
+        final = self.final(d2)  # Final output (reconstructed image)
         layer_outputs.append(final)
-        
+
         return layer_outputs
 
 class ProjNet(nn.Module):

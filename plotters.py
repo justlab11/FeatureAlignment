@@ -151,16 +151,16 @@ class TSNE_Plotter:
         cbar = fig.colorbar(sm, ax=ax1, ticks=np.arange(0.5, 20))
 
         c_labels = [
-            "0 - Base", "0 - Aux",
-            "1 - Base", "1 - Aux",
-            "2 - Base", "2 - Aux",
-            "3 - Base", "3 - Aux",
-            "4 - Base", "4 - Aux",
-            "5 - Base", "5 - Aux",
-            "6 - Base", "6 - Aux",
-            "7 - Base", "7 - Aux",
-            "8 - Base", "8 - Aux",
-            "9 - Base", "9 - Aux",
+            "0 - Target", "0 - Source",
+            "1 - Target", "1 - Source",
+            "2 - Target", "2 - Source",
+            "3 - Target", "3 - Source",
+            "4 - Target", "4 - Source",
+            "5 - Target", "5 - Source",
+            "6 - Target", "6 - Source",
+            "7 - Target", "7 - Source",
+            "8 - Target", "8 - Source",
+            "9 - Target", "9 - Source",
         ]
         cbar.set_ticklabels(c_labels)
         cbar.set_label("Classes")
@@ -184,16 +184,16 @@ class TSNE_Plotter:
         cbar = fig.colorbar(sm, ax=ax2, ticks=np.arange(0.5, 20))
 
         c_labels = [
-            "0 - Base", "0 - Aux",
-            "1 - Base", "1 - Aux",
-            "2 - Base", "2 - Aux",
-            "3 - Base", "3 - Aux",
-            "4 - Base", "4 - Aux",
-            "5 - Base", "5 - Aux",
-            "6 - Base", "6 - Aux",
-            "7 - Base", "7 - Aux",
-            "8 - Base", "8 - Aux",
-            "9 - Base", "9 - Aux",
+            "0 - Target", "0 - Source",
+            "1 - Target", "1 - Source",
+            "2 - Target", "2 - Source",
+            "3 - Target", "3 - Source",
+            "4 - Target", "4 - Source",
+            "5 - Target", "5 - Source",
+            "6 - Target", "6 - Source",
+            "7 - Target", "7 - Source",
+            "8 - Target", "8 - Source",
+            "9 - Target", "9 - Source",
         ]
         cbar.set_ticklabels(c_labels)
         cbar.set_label("Classes")
@@ -219,21 +219,21 @@ class TSNE_Plotter:
         cbar = fig.colorbar(sm, ax=ax3, ticks=np.arange(0.5, 20))
 
         c_labels = [
-            "0 - Base", "0 - Aux",
-            "1 - Base", "1 - Aux",
-            "2 - Base", "2 - Aux",
-            "3 - Base", "3 - Aux",
-            "4 - Base", "4 - Aux",
-            "5 - Base", "5 - Aux",
-            "6 - Base", "6 - Aux",
-            "7 - Base", "7 - Aux",
-            "8 - Base", "8 - Aux",
-            "9 - Base", "9 - Aux",
+            "0 - Target", "0 - Source",
+            "1 - Target", "1 - Source",
+            "2 - Target", "2 - Source",
+            "3 - Target", "3 - Source",
+            "4 - Target", "4 - Source",
+            "5 - Target", "5 - Source",
+            "6 - Target", "6 - Source",
+            "7 - Target", "7 - Source",
+            "8 - Target", "8 - Source",
+            "9 - Target", "9 - Source",
         ]
         cbar.set_ticklabels(c_labels)
         cbar.set_label("Classes")
 
-        fig.suptitle(f"Base - {base.capitalize()} / Auxiliary - {aux.capitalize()}")
+        fig.suptitle(f"Target - {base.capitalize()} / Source - {aux.capitalize()}")
 
         plt.tight_layout()
         plt.savefig(filename, format="pdf", dpi=300)
@@ -302,6 +302,7 @@ class EBSW_Plotter:
                 model=models.base,
                 dataloader=self.val_loader,
                 layers=layers,
+                base_only=True,
                 device=device,
                 unet_model=unet_models.base,
                 num_projections=num_projections
@@ -311,6 +312,7 @@ class EBSW_Plotter:
                 model=models.mixed,
                 dataloader=self.val_loader,
                 layers=layers,
+                base_only=True,
                 device=device,
                 unet_model=unet_models.mixed,
                 num_projections=num_projections
@@ -320,6 +322,7 @@ class EBSW_Plotter:
                 model=models.contrast,
                 dataloader=self.val_loader,
                 layers=layers,
+                base_only=True,
                 device=device,
                 unet_model=unet_models.contrast,
                 num_projections=num_projections
@@ -371,7 +374,7 @@ class EBSW_Plotter:
             fig.suptitle('Energy-Based Sliced Wasserstein Loss Initial Layerwise Test Results', fontsize=22)
 
             categories = ['base', 'mixed', 'contrast']
-            modes = ['Base/Base', 'Base/Aux']
+            modes = ['Target/Target', 'Target/Source']
 
             colors = ['#1f77b4', '#ff7f0e']  # Blue, Orange
 

@@ -1,40 +1,47 @@
 from pydantic import BaseModel
-from typing import List, Any
+from typing import List, Any, Literal
 from torch.utils.data import DataLoader
 import numpy as np
 import torch.nn as nn
 
 class DatasetConfig(BaseModel):
-    target_name: str
-    target_folder: str
-    aux_name: str
-    aux_folder: str
+    name: str
+    folder: str
+    train_size: int
+    val_size: int
 
-    rng_seed: int = 72
-    batch_size: int = 16
-    base_sample_ratio: float = 0.1
+class DatasetRootConfig(BaseModel):
+    target: DatasetConfig
+    source: DatasetConfig
+    image_size: Literal["small", "large"]
+    rng_seed: int
+    batch_size: int
 
-class SaveLocationsConfig(BaseModel):
-    model_folder: str = "models"
-    file_folder: str = "files"
-    image_folder: str = "images"
-    logs_folder: str = "logs"
+class SaveLocations(BaseModel):
+    model_folder: str
+    file_folder: str
+    image_folder: str
+    logs_folder: str
 
 class ClassifierConfig(BaseModel):
-    model: str = "resnet18"
-    identifier: str = "tiny"
-    num_epochs: int = 50
+    model: str
+    identifier: str
+    num_epochs: int
 
 class UNetConfig(BaseModel):
-    loss: str = "ebsw"
-    num_epochs: int = 50
+    loss: str
+    attention: bool
+    base_channels: int
+    noise_channels: int
+    num_warm_start_epochs: int
+    num_epochs: int
 
 class Config(BaseModel):
-    dataset: DatasetConfig
-    save_locations: SaveLocationsConfig
+    dataset: DatasetRootConfig
+    save_locations: SaveLocations
     classifier: ClassifierConfig
     unet: UNetConfig
-    verbose: bool = True
+    verbose: bool
 
 class DataLoaderSet(BaseModel):
     train_loader: DataLoader
