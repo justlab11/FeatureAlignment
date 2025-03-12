@@ -22,49 +22,71 @@ class HEIFFolder(Dataset):
         self.transform = transform
         self.samples = []
         self.class_samples = {}
+        self.class_to_idx = {}  # Mapping from class names to numeric indices
+        self.idx_to_class = {}  # Reverse mapping from numeric indices to class names
         
         self._populate_samples()
 
     def _populate_samples(self):
-        # Find all HEIF files recursively
-        for file_path in glob.glob(os.path.join(self.root, "**/*.heif"), recursive=True):
-            # Extract class from directory path
-            class_name = os.path.basename(os.path.dirname(file_path))
-            
-            # Add sample to list
-            self.samples.append((file_path, class_name))
-            
-            # Add to class_samples dictionary
-            if class_name not in self.class_samples:
-                self.class_samples[class_name] = []
-            self.class_samples[class_name].append(len(self.samples) - 1)
+        supported_extensions = ['.heif', '.jpg', '.jpeg']
+
+        for ext in supported_extensions:
+            for file_path in glob.glob(os.path.join(self.root, f"**/*{ext}"), recursive=True):
+                class_name = os.path.basename(os.path.dirname(file_path))
+                
+                if class_name not in self.class_to_idx:
+                    idx = len(self.class_to_idx)
+                    self.class_to_idx[class_name] = idx
+                    self.idx_to_class[idx] = class_name
+
+                idx = self.class_to_idx[class_name]
+                self.samples.append((file_path, idx))
+                
+                if idx not in self.class_samples:
+                    self.class_samples[idx] = []
+                self.class_samples[idx].append(len(self.samples) - 1)
 
     def update_samples(self, new_samples):
-        self.samples = new_samples
+        self.samples = []
         self.class_samples = {}
-        for idx, (_, class_name) in enumerate(self.samples):
-            if class_name not in self.class_samples:
-                self.class_samples[class_name] = []
-            self.class_samples[class_name].append(idx)
+        self.class_to_idx = {}
+        self.idx_to_class = {}
+
+        for file_path, class_name in new_samples:
+            if class_name not in self.class_to_idx:
+                idx = len(self.class_to_idx)
+                self.class_to_idx[class_name] = idx
+                self.idx_to_class[idx] = class_name
+
+            idx = self.class_to_idx[class_name]
+            self.samples.append((file_path, idx))
+
+            if idx not in self.class_samples:
+                self.class_samples[idx] = []
+            self.class_samples[idx].append(len(self.samples) - 1)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, index):
-        image_path, label = self.samples[index]
+        image_path, label_idx = self.samples[index]
         
-        # Load HEIC image
         image = Image.open(image_path)
         
-        # Apply transform if provided
         if self.transform is not None:
             image = self.transform(image)
 
-        return image, label
+        return image, label_idx
 
     def get_class_samples(self):
         return self.class_samples
 
+    def get_class_to_idx(self):
+        return self.class_to_idx
+
+    def get_idx_to_class(self):
+        return self.idx_to_class
+    
 class IndexedDataset(Dataset):
     def __init__(self, base_dataset, indices=None):
         self.base_dataset = base_dataset

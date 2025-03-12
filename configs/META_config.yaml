@@ -1,0 +1,69 @@
+datasets:
+  - name: "MNIST"
+    folder: "data/mnist"
+
+  - name: "Gap_MNIST"
+    folder: "data/gap_mnist"
+
+  - name: "Texture_MNIST"
+    folder: "data/texture_mnist"
+
+  - name: "SVHN"
+    folder: "data/svhn"
+
+  - name: "Cifar10"
+    folder: "data/cifar10"
+
+  - name: "Smear_Cifar10"
+    folder: "data/smear_cifar10"
+
+  - name: "Cut_Cifar10"
+    folder: "data/cut_cifar10"
+
+  - name: "Amazon"
+    folder: "data/amazon"
+  
+  - name: "DSLR"
+    folder: "data/dslr"
+  
+  - name: "Webcam"
+    folder: "data/webcam"
+
+dataset_pairs:
+  - target: "MNIST"
+    source: "Gap_MNIST"
+
+  - target: "MNIST"
+    source: "Texture_MNIST"
+
+  - target: "MNIST"
+    source: "SVHN"
+
+  - target: "CIFAR10"
+    source: "Cut_Cifar10"
+
+  - target: "Amazon"
+    source: "DSLR"
+
+  - target: "Amazon"
+    source: "Webcam"
+
+  - target: "DSLR"
+    source: "Webcam"
+    
+  - target: "DSLR"
+    source: "Amazon"
+
+  - target: "Webcam"
+    source: "Amazon"
+
+  - target: "Webcam"
+    source: "DSLR"
+
+image_sizes:
+  - "small"
+  - "large"
+
+unet_attention:
+  - True
+  - False

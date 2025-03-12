@@ -479,6 +479,12 @@ class DynamicResNet(nn.Module):
                 nn.init.constant_(module.weight, 1)
                 nn.init.constant_(module.bias, 0)
 
+    def reset_head_parameters(self):
+        if hasattr(self.model, 'fc'):
+            nn.init.xavier_normal_(self.model.fc.weight)
+            if self.model.fc.bias is not None:
+                nn.init.zeros_(self.model.fc.bias)
+
     def forward(self, x):
         layer_outputs = []
 
@@ -610,7 +616,138 @@ class SmallCustomUNET(nn.Module):
         layer_outputs.append(final_output)
 
         return layer_outputs
+
+class AttentionGate(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        super(AttentionGate, self).__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi
+
+class SmallAttentionUNET(nn.Module):
+    def __init__(self, base_channels=32, noise_channels=8):
+        super(SmallAttentionUNET, self).__init__()
+        
+        self.base_channels = base_channels
+        self.noise_channels = noise_channels
+
+        # Encoder
+        self.enc1 = self.conv_block(3, base_channels)
+        self.enc2 = self.conv_block(base_channels, base_channels * 2)
+        self.enc3 = self.conv_block(base_channels * 2, base_channels * 4)
+        self.enc4 = self.conv_block(base_channels * 4, base_channels * 8)
+        self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
+
+        # Latent space normalization
+        self.latent_norm = nn.LayerNorm([base_channels * 16, 2, 2])  # For latent space (2x2 for 32x32 input)
+
+        # Noise addition
+        self.noise_conv = nn.Conv1d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
+        self.noise_weight = nn.Parameter(torch.tensor(0.05))
+        self.latent_weight = nn.Parameter(torch.tensor(1.0))
+        
+        # Attention Gates
+        self.attention4 = AttentionGate(F_g=base_channels*16, F_l=base_channels*8, F_int=base_channels*8)
+        self.attention3 = AttentionGate(F_g=base_channels*8, F_l=base_channels*4, F_int=base_channels*4)
+        self.attention2 = AttentionGate(F_g=base_channels*4, F_l=base_channels*2, F_int=base_channels*2)
+        self.attention1 = AttentionGate(F_g=base_channels*2, F_l=base_channels, F_int=base_channels)
+
+        # Decoder
+        self.dec4 = self.conv_block(base_channels * (16 + 8), base_channels * 8)
+        self.dec3 = self.conv_block(base_channels * (8 + 4), base_channels * 4)
+        self.dec2 = self.conv_block(base_channels * (4 + 2), base_channels * 2)
+        self.dec1 = self.conv_block(base_channels * (2 + 1), base_channels)
+        
+        # Final output layer
+        self.final = nn.Conv2d(base_channels, 3, kernel_size=1)
+        
+        # Pooling and Upsampling layers
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def conv_block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
     
+    def get_normalized_weights(self):
+        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
+        return (
+            self.noise_weight.abs() / sum_weights,
+            self.latent_weight.abs() / sum_weights,
+        )
+
+    def forward(self, x):
+        layer_outputs = []
+
+        # Encoder
+        e1 = self.enc1(x)  
+        layer_outputs.append(e1)
+
+        e2 = self.enc2(self.pool(e1))  
+        layer_outputs.append(e2)
+
+        e3 = self.enc3(self.pool(e2))  
+        layer_outputs.append(e3)
+
+        e4 = self.enc4(self.pool(e3))  
+        layer_outputs.append(e4)
+
+        e5 = self.enc5(self.pool(e4))  
+        layer_outputs.append(e5)  # Latent representation
+
+        # Latent space normalization and noise addition
+        e5_normalized = self.latent_norm(e5)
+
+        noise = torch.randn(e5.size(0), self.noise_channels, e5.size(2) * e5.size(3), device=e5.device)  
+        
+        # Transform noise to match latent space dimensions
+        noise_transformed = self.noise_conv(noise).view_as(e5)
+
+        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
+
+        e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
+        e5_blended = self.latent_norm(e5_blended)  # Re-normalize after blending
+
+        # Decoder with Attention
+        d4 = self.dec4(torch.cat([self.upsample(e5_blended), self.attention4(g=self.upsample(e5_blended), x=e4)], dim=1))
+        layer_outputs.append(d4)
+
+        d3 = self.dec3(torch.cat([self.upsample(d4), self.attention3(g=self.upsample(d4), x=e3)], dim=1))
+        layer_outputs.append(d3)
+
+        d2 = self.dec2(torch.cat([self.upsample(d3), self.attention2(g=self.upsample(d3), x=e2)], dim=1))
+        layer_outputs.append(d2)
+
+        d1 = self.dec1(torch.cat([self.upsample(d2), self.attention1(g=self.upsample(d2), x=e1)], dim=1))
+        layer_outputs.append(d1)
+
+        final_output = self.final(d1)
+        layer_outputs.append(final_output)
+
+        return layer_outputs
+
 class LargeCustomUNET(nn.Module):
     """
     Expects images of size 224x224
@@ -712,6 +849,120 @@ class LargeCustomUNET(nn.Module):
         layer_outputs.append(d2)
 
         d1 = self.dec1(torch.cat([self.upsample(d2), e1], dim=1))
+        layer_outputs.append(d1)
+
+        final_output = self.final(d1)
+        layer_outputs.append(final_output)
+
+        return layer_outputs
+    
+class LargeAttentionUNET(nn.Module):
+    """
+    Expects images of size 224x224
+    """
+    def __init__(self, base_channels=32, noise_channels=8):
+        super(LargeAttentionUNET, self).__init__()
+        
+        self.base_channels = base_channels
+        self.noise_channels = noise_channels
+
+        # Encoder
+        self.enc1 = self.conv_block(3, base_channels)
+        self.enc2 = self.conv_block(base_channels, base_channels * 2)
+        self.enc3 = self.conv_block(base_channels * 2, base_channels * 4)
+        self.enc4 = self.conv_block(base_channels * 4, base_channels * 8)
+        self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
+
+        # Latent space normalization
+        self.latent_norm = nn.LayerNorm([base_channels * 16, 7, 7])  # Adjusted for latent space size (7x7 for 224x224 input)
+
+        # Noise addition
+        self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
+        self.noise_weight = nn.Parameter(torch.tensor(0.05))
+        self.latent_weight = nn.Parameter(torch.tensor(1.0))
+        
+        # Attention Gates
+        self.attention4 = AttentionGate(F_g=base_channels*16, F_l=base_channels*8, F_int=base_channels*8)
+        self.attention3 = AttentionGate(F_g=base_channels*8, F_l=base_channels*4, F_int=base_channels*4)
+        self.attention2 = AttentionGate(F_g=base_channels*4, F_l=base_channels*2, F_int=base_channels*2)
+        self.attention1 = AttentionGate(F_g=base_channels*2, F_l=base_channels, F_int=base_channels)
+
+        # Decoder
+        self.dec4 = self.conv_block(base_channels * (16 + 8), base_channels * 8)
+        self.dec3 = self.conv_block(base_channels * (8 + 4), base_channels * 4)
+        self.dec2 = self.conv_block(base_channels * (4 + 2), base_channels * 2)
+        self.dec1 = self.conv_block(base_channels * (2 + 1), base_channels)
+        
+        # Final output layer
+        self.final = nn.Conv2d(base_channels, 3, kernel_size=1)
+        
+        # Pooling and Upsampling layers
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def conv_block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+    
+    def get_normalized_weights(self):
+        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
+        return (
+            self.noise_weight.abs() / sum_weights,
+            self.latent_weight.abs() / sum_weights,
+        )
+
+    def forward(self, x):
+        layer_outputs = []
+
+        # Encoder
+        e1 = self.enc1(x)  
+        layer_outputs.append(e1)
+
+        e2 = self.enc2(self.pool(e1))  
+        layer_outputs.append(e2)
+
+        e3 = self.enc3(self.pool(e2))  
+        layer_outputs.append(e3)
+
+        e4 = self.enc4(self.pool(e3))  
+        layer_outputs.append(e4)
+
+        e5 = self.enc5(self.pool(e4))  
+        
+        # Latent space normalization and noise addition
+        batch_size, channels, height, width = e5.shape
+
+        e5_normalized = e5.view(batch_size, channels, -1)  # Flatten spatial dimensions
+        e5_normalized = nn.LayerNorm(e5_normalized.size()[1:])(e5_normalized)  
+        e5_normalized = e5_normalized.view(batch_size, channels, height, width)  # Reshape back
+
+        noise = torch.randn(batch_size, self.noise_channels, height, width, device=e5.device)  
+        
+        # Transform noise to match latent space dimensions
+        noise_transformed = self.noise_conv(noise)
+
+        norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
+
+        e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
+        e5_blended = e5_blended.view_as(e5)  # Ensure shape consistency if needed
+
+        layer_outputs.append(e5_blended)
+
+        # Decoder with Attention
+        d4 = self.dec4(torch.cat([self.upsample(e5_blended), self.attention4(g=self.upsample(e5_blended), x=e4)], dim=1))
+        layer_outputs.append(d4)
+
+        d3 = self.dec3(torch.cat([self.upsample(d4), self.attention3(g=self.upsample(d4), x=e3)], dim=1))
+        layer_outputs.append(d3)
+
+        d2 = self.dec2(torch.cat([self.upsample(d3), self.attention2(g=self.upsample(d3), x=e2)], dim=1))
+        layer_outputs.append(d2)
+
+        d1 = self.dec1(torch.cat([self.upsample(d2), self.attention1(g=self.upsample(d2), x=e1)], dim=1))
         layer_outputs.append(d1)
 
         final_output = self.final(d1)

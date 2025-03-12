@@ -63,3 +63,17 @@ class ModelSet(BaseModel):
     base: Any
     mixed: Any
     contrast: Any
+
+class MetaDatasetConfig(BaseModel):
+    name: str
+    folder: str
+
+class MetaDatasetPair(BaseModel):
+    target: str
+    source: str
+
+class MetaConfig(BaseModel):
+    datasets: List[MetaDatasetConfig]
+    dataset_pairs: List[MetaDatasetPair]
+    image_sizes: List[str]
+    unet_attention: List[bool]

@@ -10,3 +10,6 @@ models_unet
 unet_folder
 unet_work_copy.ipynb
 logs
+main_unet.py
+unet_work.ipynb
+configs/META_test.yaml

@@ -49,6 +49,7 @@ def main(config_fname):
     # data stuff
     BATCH_SIZE: int = CONFIG.dataset.batch_size
     CLASSIFIER_ID: str = CONFIG.classifier.identifier
+    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}"
 
     # data size info
     TARGET_SIZE: int = CONFIG.dataset.source.train_size
@@ -200,6 +201,7 @@ def main(config_fname):
 
     for x, _, _ in val_loader:
         INPUT_SHAPE = x.shape
+        logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
 
     logger.info("TRAINING CLASSIFIERS\n--------------------")
@@ -343,7 +345,7 @@ def main(config_fname):
     )
     contrast_model_trainer.classifier = contrast_model
 
-    # logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
+    logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
     base_acc: float = base_model_trainer.evaluate_model(DEVICE)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")

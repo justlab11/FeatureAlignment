@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 
 
 from losses import supervised_contrastive_loss, SlicedWasserstein, DSW, ISEBSW
-from models import ProjNet, SmallCustomUNET, LargeCustomUNET
+from models import ProjNet, SmallCustomUNET, LargeCustomUNET, SmallAttentionUNET, LargeAttentionUNET
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
 
 logger = logging.getLogger(__name__)
@@ -177,12 +177,24 @@ def load_yaml(file_path:str):
 
 def make_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8):
     def unet():
-        if size == "small":
-            model = SmallCustomUNET(
+        if size == "small" and attention:
+            model = SmallAttentionUNET(
                 base_channels=base_channels,
                 noise_channels=noise_channels
             )
-        elif size == "large":
+        elif size == "small" and not attention:
+            model = SmallCustomUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            ) 
+
+        elif size == "large" and attention:
+            model = LargeAttentionUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+
+        elif size == "large" and not attention:
             model = LargeCustomUNET(
                 base_channels=base_channels,
                 noise_channels=noise_channels

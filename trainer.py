@@ -260,6 +260,9 @@ class Trainer:
 
         classifier_scheduler = CosineAnnealingLR(classifier_optimizer, T_max=classifier_epochs, eta_min=1e-8)
 
+        # reset head of the model
+        self.classifier.reset_head_parameters()
+
         # Phase 2: Classifier Head Fine-tuning
         logger.info("Starting Classifier Head Fine-tuning")
         for epoch in range(classifier_epochs):
