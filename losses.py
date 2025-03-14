@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def supervised_contrastive_loss(features, labels, temperature):
+def supervised_contrastive_loss(features, labels, group_labels, temperature):
     """
     Compute the supervised contrastive loss
     
@@ -25,6 +25,7 @@ def supervised_contrastive_loss(features, labels, temperature):
     # Create a mask for positive pairs
     labels = labels.contiguous().view(-1, 1)
     mask = torch.eq(labels, labels.T).float().to(device)
+    inter_mask = torch.ne(group_labels, group_labels.T).float().to(device)
     
     # Exclude self-contrast
     logits_mask = torch.scatter(
@@ -33,18 +34,26 @@ def supervised_contrastive_loss(features, labels, temperature):
         torch.arange(batch_size).view(-1, 1).to(device),
         0
     )
-    mask = mask * logits_mask
-    
+    mask_exc = mask*logits_mask
+
+    pos_inter_mask = mask*inter_mask
+    neg_inter_mask = (1-mask)*inter_mask
+
     # Compute log_prob
-    exp_logits = torch.exp(similarity_matrix) * logits_mask
-    log_prob = similarity_matrix - torch.log(exp_logits.sum(1, keepdim=True))
+    exp_logits = torch.exp(similarity_matrix)*logits_mask  
+    neg_exp_logits = exp_logits*(1-mask) # all negatives
+
+    log_prob = similarity_matrix - torch.log(exp_logits +  neg_exp_logits.sum(1, keepdim=True))
+
+    neg_inter_exp_logits = exp_logits*neg_inter_mask  # inter negatives 
+    log_prob_inter = similarity_matrix - torch.log(exp_logits + neg_inter_exp_logits.sum(1, keepdim=True))
     
     # Compute mean of log-likelihood over positive pairs
-    mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
-    
+    mean_log_prob_pos = (mask_exc * log_prob).sum(1) / mask_exc.sum(1)
+    mean_log_prob_pos_inter = (pos_inter_mask * log_prob_inter).sum(1) / (pos_inter_mask.sum(1))
+
     # Loss
-    loss = -mean_log_prob_pos
-    loss = loss.mean()
+    loss = (-mean_log_prob_pos-mean_log_prob_pos_inter ).mean()
     
     return loss
     
@@ -78,8 +87,8 @@ class SlicedWasserstein(torch.nn.Module):
         w_dist = torch.mean(torch.abs(x_proj_sort - y_proj_sort))
         return w_dist
 
-def rand_projections(dim, num_projections=1000):
-    projections = torch.randn((num_projections, dim))
+def rand_projections(dim, num_projections=1000,device='cpu'):
+    projections = torch.randn((num_projections, dim),device=device)
     projections = projections / torch.sqrt(torch.sum(projections ** 2, dim=1, keepdim=True))
     return projections
 
@@ -167,3 +176,26 @@ class DSW(torch.nn.Module):
             data_fake.view(data.shape[0], -1)
         )
         return _dswd
+
+def one_dimensional_Wasserstein_prod(X,Y,theta,p):
+    X_prod = torch.matmul(X, theta.transpose(0, 1))
+    Y_prod = torch.matmul(Y, theta.transpose(0, 1))
+    X_prod = X_prod.view(X_prod.shape[0], -1)
+    Y_prod = Y_prod.view(Y_prod.shape[0], -1)
+    wasserstein_distance = torch.abs(
+        (
+                torch.sort(X_prod, dim=0)[0]
+                - torch.sort(Y_prod, dim=0)[0]
+        )
+    )
+    wasserstein_distance = torch.sum(torch.pow(wasserstein_distance, p), dim=0,keepdim=True)
+    return wasserstein_distance
+
+def ISEBSW(X, Y, L=10, p=2, device="cpu"):
+    dim = X.size(1)
+    theta = rand_projections(dim, L, device)
+    wasserstein_distances = one_dimensional_Wasserstein_prod(X,Y,theta,p=p)
+    wasserstein_distances =  wasserstein_distances.view(1,L)
+    weights = torch.softmax(wasserstein_distances,dim=1)
+    sw = torch.sum(weights*wasserstein_distances,dim=1).mean()
+    return  torch.pow(sw,1./p)

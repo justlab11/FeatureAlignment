@@ -3,10 +3,166 @@ import torchvision
 import torch.nn as nn
 import torch.optim as optim
 from torchvision.models import resnet18
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split as tts
+import pillow_heif
+from torchvision import transforms
+import glob
+from PIL import Image
+import os
+
+# Register HEIC opener
+pillow_heif.register_heif_opener()
+
+class HEIFFolder(Dataset):
+    def __init__(self, root, transform=None):
+        self.root = root
+        self.transform = transform
+        self.samples = []
+        self.class_samples = {}
+        self.class_to_idx = {}  # Mapping from class names to numeric indices
+        self.idx_to_class = {}  # Reverse mapping from numeric indices to class names
+        
+        self._populate_samples()
+
+    def _populate_samples(self):
+        supported_extensions = ['.heif', '.jpg', '.jpeg']
+
+        for ext in supported_extensions:
+            for file_path in glob.glob(os.path.join(self.root, f"**/*{ext}"), recursive=True):
+                class_name = os.path.basename(os.path.dirname(file_path))
+                
+                if class_name not in self.class_to_idx:
+                    idx = len(self.class_to_idx)
+                    self.class_to_idx[class_name] = idx
+                    self.idx_to_class[idx] = class_name
+
+                idx = self.class_to_idx[class_name]
+                self.samples.append((file_path, idx))
+                
+                if idx not in self.class_samples:
+                    self.class_samples[idx] = []
+                self.class_samples[idx].append(len(self.samples) - 1)
+
+    def update_samples(self, new_samples):
+        self.samples = []
+        self.class_samples = {}
+        self.class_to_idx = {}
+        self.idx_to_class = {}
+
+        for file_path, class_name in new_samples:
+            if class_name not in self.class_to_idx:
+                idx = len(self.class_to_idx)
+                self.class_to_idx[class_name] = idx
+                self.idx_to_class[idx] = class_name
+
+            idx = self.class_to_idx[class_name]
+            self.samples.append((file_path, idx))
+
+            if idx not in self.class_samples:
+                self.class_samples[idx] = []
+            self.class_samples[idx].append(len(self.samples) - 1)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        image_path, label_idx = self.samples[index]
+        
+        image = Image.open(image_path)
+        
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, label_idx
+
+    def get_class_samples(self):
+        return self.class_samples
+
+    def get_class_to_idx(self):
+        return self.class_to_idx
+
+    def get_idx_to_class(self):
+        return self.idx_to_class
+    
+class IndexedDataset(Dataset):
+    def __init__(self, base_dataset, indices=None):
+        self.base_dataset = base_dataset
+        self.indices = indices if indices is not None else list(range(len(base_dataset)))
+        self.class_samples = self._build_class_samples()
+        self.file_paths = [self.base_dataset.samples[i][0] for i in self.indices]
+
+    def _build_class_samples(self):
+        class_samples = {}
+        for idx, original_idx in enumerate(self.indices):
+            _, label = self.base_dataset.samples[original_idx]
+            if label not in class_samples:
+                class_samples[label] = []
+            class_samples[label].append(idx)
+        return class_samples
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        return self.base_dataset[self.indices[idx]]
+
+    def get_file_path(self, idx):
+        return self.file_paths[idx]
+
+class CombinedDataset(Dataset):
+    def __init__(self, base_dataset: IndexedDataset, aux_dataset: IndexedDataset):
+        self.base_dataset = base_dataset
+        self.aux_dataset = aux_dataset
+        self.unique_sources = True
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, index):
+        base_file_path = self.base_dataset.get_file_path(index)
+        base_image = Image.open(base_file_path)
+        
+        if self.base_dataset.base_dataset.transform is not None:
+            base_image = self.base_dataset.base_dataset.transform(base_image)
+        
+        label = self.base_dataset.base_dataset.samples[self.base_dataset.indices[index]][1]
+        
+        pair_selection = np.random.uniform()
+        
+        if self.unique_sources or pair_selection < 0.5:
+            aux_idx = np.random.choice(self.aux_dataset.class_samples[label])
+            aux_file_path = self.aux_dataset.get_file_path(aux_idx)
+            aux_image = Image.open(aux_file_path)
+            
+            if self.aux_dataset.base_dataset.transform is not None:
+                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
+        elif pair_selection < 0.75:
+            base_idx = np.random.choice(self.base_dataset.class_samples[label])
+            aux_file_path = self.base_dataset.get_file_path(base_idx)
+            aux_image = Image.open(aux_file_path)
+            
+            if self.base_dataset.base_dataset.transform is not None:
+                aux_image = self.base_dataset.base_dataset.transform(aux_image)
+        else:
+            aux_idx1 = np.random.choice(self.aux_dataset.class_samples[label])
+            aux_idx2 = np.random.choice(self.aux_dataset.class_samples[label])
+            base_file_path = self.aux_dataset.get_file_path(aux_idx1)
+            aux_file_path = self.aux_dataset.get_file_path(aux_idx2)
+            base_image = Image.open(base_file_path)
+            
+            if self.aux_dataset.base_dataset.transform is not None:
+                base_image = self.aux_dataset.base_dataset.transform(base_image)
+            aux_image = Image.open(aux_file_path)
+            
+            if self.aux_dataset.base_dataset.transform is not None:
+                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
+        
+        label = float(label)
+
+        return base_image, aux_image, label
 
 class PairedMNISTDataset(Dataset):
     """
@@ -25,24 +181,34 @@ class PairedMNISTDataset(Dataset):
             base_images: np.ndarray, 
             base_labels: np.ndarray, 
             aux_images: np.ndarray, 
-            aux_labels: np.ndarray
+            aux_labels: np.ndarray,
+            img_size: int,
+            in_memory: bool = False,
         ):
         
-        resized_base_images = np.zeros((len(base_images), 3, 32, 32))
-        for i, img in enumerate(base_images):
-            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
-            resized_base_images[i] = new_img.transpose(2,0,1)
+        if in_memory:
+            resized_base_images = np.zeros((len(base_images), 3, img_size, img_size))
+            for i, img in enumerate(base_images):
+                new_img = cv2.resize(img.transpose(1,2,0), (img_size,img_size), interpolation=cv2.INTER_LINEAR)
+                resized_base_images[i] = new_img.transpose(2,0,1)
 
-        resized_aux_images = np.zeros((len(aux_images), 3, 32, 32))
-        for i, img in enumerate(aux_images):
-            new_img = cv2.resize(img.transpose(1,2,0), (32,32), interpolation=cv2.INTER_LINEAR)
-            resized_aux_images[i] = new_img.transpose(2,0,1)
+            resized_aux_images = np.zeros((len(aux_images), 3, img_size, img_size))
+            for i, img in enumerate(aux_images):
+                new_img = cv2.resize(img.transpose(1,2,0), (img_size,img_size), interpolation=cv2.INTER_LINEAR)
+                resized_aux_images[i] = new_img.transpose(2,0,1)
 
-        self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
-        self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
+            self.base_images: torch.tensor = torch.from_numpy(resized_base_images).float() / 255.0
+            self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
 
-        self.aux_images: torch.tensor = torch.from_numpy(resized_aux_images).float() / 255.0
-        self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
+            self.aux_images: torch.tensor = torch.from_numpy(resized_aux_images).float() / 255.0
+            self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
+        
+        else:
+            self.base_images: torch.tensor = torch.from_numpy(base_images).float() / 255.0
+            self.base_labels: torch.tensor = torch.from_numpy(base_labels).long()
+
+            self.aux_images: torch.tensor = torch.from_numpy(aux_images).float() / 255.0
+            self.aux_labels: torch.tensor = torch.from_numpy(aux_labels).long()
 
         self.base_indices_by_class = self._group_indices_by_class(self.base_labels)
         self.aux_indices_by_class = self._group_indices_by_class(self.aux_labels)
@@ -71,34 +237,41 @@ class PairedMNISTDataset(Dataset):
             base_idx = idx
             label = self.base_labels[base_idx].item()
 
-        pair_selection = np.random.uniform()
-        if pair_selection < .5 or self.unique_sources:
-            base_sample = self.base_images[base_idx]
-            if self.specific_class is not None:
-                aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
-            else:
-                aux_idx = np.random.choice(self.aux_indices_by_class[label])
-            aux_sample = self.aux_images[aux_idx]
-        elif pair_selection < .75:
-            base_sample = self.base_images[base_idx]
-            if self.specific_class is not None:
-                aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
-            else:
-                aux_idx = np.random.choice(self.base_indices_by_class[label])
-            aux_sample = self.base_images[aux_idx]
+        base_sample = self.base_images[base_idx]
+
+        if self.specific_class is not None:
+            aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
         else:
-            if self.specific_class is not None:
-                aux_idx1 = np.random.choice(self.aux_indices_by_class[self.specific_class])
-                aux_idx2 = np.random.choice(self.aux_indices_by_class[self.specific_class])
-            else:
-                aux_idx1 = np.random.choice(self.aux_indices_by_class[label])
-                aux_idx2 = np.random.choice(self.aux_indices_by_class[label])
-            base_sample = self.aux_images[aux_idx1]
-            aux_sample = self.aux_images[aux_idx2]
+            aux_idx = np.random.choice(self.aux_indices_by_class[label])
+
+        aux_sample = self.aux_images[aux_idx]
+
+        # pair_selection = np.random.uniform()
+        # if pair_selection < .7 or self.unique_sources:
+        #     base_sample = self.base_images[base_idx]
+        #     if self.specific_class is not None:
+        #         aux_idx = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx = np.random.choice(self.aux_indices_by_class[label])
+        #     aux_sample = self.aux_images[aux_idx]
+        # elif pair_selection < .85:
+        #     base_sample = self.base_images[base_idx]
+        #     if self.specific_class is not None:
+        #         aux_idx = np.random.choice(self.base_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx = np.random.choice(self.base_indices_by_class[label])
+        #     aux_sample = self.base_images[aux_idx]
+        # else:
+        #     if self.specific_class is not None:
+        #         aux_idx1 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #         aux_idx2 = np.random.choice(self.aux_indices_by_class[self.specific_class])
+        #     else:
+        #         aux_idx1 = np.random.choice(self.aux_indices_by_class[label])
+        #         aux_idx2 = np.random.choice(self.aux_indices_by_class[label])
+        #     base_sample = self.aux_images[aux_idx1]
+        #     aux_sample = self.aux_images[aux_idx2]
 
         return base_sample, aux_sample, label
-
-
 
 class DatasetGenerator:
     def __init__(self, images, labels, subset_ratio=.3, base_ds="red", aux_ds="color", train=True):

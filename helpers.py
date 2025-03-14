@@ -4,128 +4,18 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np
+import yaml
+import logging
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
-from losses import supervised_contrastive_loss, SlicedWasserstein, DSW
-from models import ProjNet
 
+from losses import supervised_contrastive_loss, SlicedWasserstein, DSW, ISEBSW
+from models import ProjNet, SmallCustomUNET, LargeCustomUNET, SmallAttentionUNET, LargeAttentionUNET
+from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
 
-def classification_run(model, optimizer, dataloader, device, mode='base_only', train=True, unet_model=None):
-    """
-    Run one epoch of training or evaluation on the given dataset.
-    
-    Args:
-    - model: The neural network model
-    - optimizer: The optimizer for the model (used only if train=True)
-    - dataloader: DataLoader instance for the dataset
-    - mode: 'base_only', 'base_and_aux', or 'contrastive'
-    - train: Boolean, if True, run in training mode; if False, run in evaluation mode
-    
-    Returns:
-    - Average loss for the epoch
-    - Accuracy for the epoch (for classification) or None (for contrastive)
-    """
-
-    criterion = nn.CrossEntropyLoss()
-    
-    if train:
-        model.train()
-    else:
-        model.eval()
-
-    if unet_model:
-        unet_model.to(device)
-        unet_model.eval()
-    
-    running_loss = 0.0
-    correct = 0
-    total = 0
-
-    if mode == "base_only":
-        dataloader.dataset.unique_sources = True 
-    else:
-        dataloader.dataset.unique_sources = False
-    
-    for base_samples, aux_samples, labels in dataloader:
-        base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
-        
-        if train:
-            optimizer.zero_grad()
-        
-        with torch.set_grad_enabled(train):
-            if mode == 'base_only' and unet_model == None:
-                outputs = model(base_samples)[-1]
-                loss = criterion(outputs, labels)
-                
-                _, predicted = outputs.max(1)
-                total += labels.size(0)
-                correct += predicted.eq(labels).sum().item()
-            
-            else:
-                if unet_model != None:
-                    aux_samples = unet_model(aux_samples)
-
-                inputs = torch.cat((base_samples, aux_samples), 0)
-
-                outputs = model(inputs)[-1]
-                loss = criterion(outputs, labels.repeat(2))
-                
-                _, predicted = outputs.max(1)
-                total += labels.size(0) * 2
-                correct += predicted.eq(labels.repeat(2)).sum().item()
-        
-        if train:
-            loss.backward()
-            optimizer.step()
-        
-        running_loss += loss.item()
-    
-    epoch_loss = running_loss / len(dataloader)
-    epoch_accuracy = correct / total
-    
-    return epoch_loss, epoch_accuracy
-
-def contrastive_run(model, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.1, unet_model=None):
-    """
-    Run one epoch of contrastive learning training or evaluation.
-    """
-    criterion = supervised_contrastive_loss
-    
-    if train:
-        model.train()
-        proj_head.train()
-    else:
-        model.eval()
-        proj_head.eval()
-    
-    running_loss = 0.0
-
-    if unet_model:
-        unet_model.to(device)
-        unet_model.eval()
-    
-    for base_samples, aux_samples, labels in dataloader:
-        base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
-        
-        if unet_model!=None:
-            aux_samples = unet_model(aux_samples)
-        if train:
-            optimizer.zero_grad()
-        
-        with torch.set_grad_enabled(train):
-            inputs = torch.cat((base_samples, aux_samples), 0)
-            features = model(inputs)[-1]
-            projected = proj_head(features)
-            loss = criterion(projected, labels.repeat(2), temperature=temperature)
-        
-        if train:
-            loss.backward()
-            optimizer.step()
-        
-        running_loss += loss.item()
-    
-    epoch_loss = running_loss / len(dataloader)
-    
-    return epoch_loss
+logger = logging.getLogger(__name__)
 
 def old_unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
     upscale_transform = transforms.Resize((256, 256))
@@ -171,43 +61,6 @@ def old_unet_run(unet_model, classifier, optimizer, dataloader, device, train=Tr
 
     return epoch_loss
 
-def unet_run(unet_model, classifier, optimizer, dataloader, device, train=True):
-    criterion = SlicedWasserstein(num_projections=256)
-    unet_model.to(device)
-    classifier.to(device)
-
-    if train:
-        unet_model.train()
-    else:
-        unet_model.eval()
-
-    classifier.eval()
-
-    running_loss = 0.0
-
-    for base_samples, aux_samples, _ in dataloader: 
-        base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
-        if train:
-            optimizer.zero_grad()
-
-        with torch.set_grad_enabled(train):
-            unet_output = unet_model(aux_samples)
-            base_reps = classifier(base_samples)
-            aux_reps = classifier(unet_output)
-        
-        loss = 0
-        for i in range(len(base_reps)):
-            loss += criterion(base_reps[i], aux_reps[i])
-
-        if train:
-            loss.backward()
-            optimizer.step()
-
-        running_loss += loss.item()
-
-    epoch_loss = running_loss / len(dataloader)
-
-    return epoch_loss
 
 def run_dswd_classwise(model, dataloader, layers, device, base_only=True, unet_model=None, class_choice=None, num_projections=128, embedding_norm=1.0):
     dataloader.dataset.unique_sources = True
@@ -274,7 +127,7 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, unet
     for cls in unique_classes:
         dataloader.dataset.specific_class = cls
         class_hist[str(cls)] = len(dataloader)
-        print(f"Class {cls} Size: {len(dataloader)*dataloader.batch_size} ({len(dataloader)} batches)")
+        logger.info(f"Class {cls} Size: {len(dataloader)*dataloader.bs} ({len(dataloader)} batches)")
         loss = run_dswd_classwise(
             model=model,
             dataloader=dataloader,
@@ -290,7 +143,7 @@ def run_dswd_all_classes(model, dataloader, layers, device, base_only=True, unet
     return class_loss, class_hist
 
 class EarlyStopper:
-    def __init__(self, patience=5, min_delta=0):
+    def __init__(self, patience:int=5, min_delta:float=0):
         """
         Initialize the EarlyStopper.
 
@@ -316,3 +169,37 @@ class EarlyStopper:
             self.counter = 0
 
         return self.early_stop
+
+def load_yaml(file_path:str):
+    with open(file_path, "r") as file:
+        data = yaml.safe_load(file)
+    return data
+
+def make_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8):
+    def unet():
+        if size == "small" and attention:
+            model = SmallAttentionUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+        elif size == "small" and not attention:
+            model = SmallCustomUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            ) 
+
+        elif size == "large" and attention:
+            model = LargeAttentionUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+
+        elif size == "large" and not attention:
+            model = LargeCustomUNET(
+                base_channels=base_channels,
+                noise_channels=noise_channels
+            )
+
+        return model
+    
+    return unet

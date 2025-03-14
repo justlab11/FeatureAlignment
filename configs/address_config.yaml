@@ -1,0 +1,37 @@
+dataset:
+  target:
+    name: "MNIST"
+    folder: "data/mnist_v2"
+    train_size: 1000
+    val_size: 3000
+
+  source:
+    name: "SVHN"
+    folder: "data/house_mnist_32"
+    train_size: 69000
+    val_size: 500
+
+  image_size: "small"
+  rng_seed: 72
+  batch_size: 64
+
+save_locations:
+  model_folder: "models"
+  file_folder: "files"
+  image_folder: "images"
+  logs_folder : "logs"
+
+classifier:
+  model: "resnet9"
+  identifier: "MNIST+SVHN" # unique identifier for the set of models
+  num_epochs: 100
+
+unet:
+  loss: "ebsw"
+  attention: false
+  base_channels: 32
+  noise_channels: 8
+  num_warm_start_epochs: 20
+  num_epochs: 100
+
+verbose: false
