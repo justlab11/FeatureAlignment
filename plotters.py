@@ -417,7 +417,7 @@ def plot_examples(dataset, unet_model, filename, device):
     num_samples = 10
     random_samples = np.random.choice(len(dataset), num_samples, replace=False)
 
-    dataset.dataset.unique_sources = True
+    #dataset.dataset.unique_sources = True
 
     # Create a figure with 10 columns and 3 rows
     fig, axes = plt.subplots(3, num_samples, figsize=(20, 6))

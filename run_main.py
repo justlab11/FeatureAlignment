@@ -70,8 +70,8 @@ def main(config_fname):
             raise ValueError(f"Invalid dataset: {pair.source}")
     
     dataset_options = meta_config.datasets
-    dataset_sizes = [i/10 for i in range(1, 10)]
-    
+    #dataset_sizes = [i/10 for i in range(1, 10)]
+    dataset_sizes = [.9]
     combinations = list(itertools.product(
         meta_config.dataset_pairs,
         meta_config.image_sizes,
@@ -105,7 +105,12 @@ def main(config_fname):
         config.dataset.target.folder = target_dataset.folder
         config.dataset.source.folder = source_dataset.folder
 
-        config.dataset.target.train_size = int(target_ds_len * .85)
+        if "mnist" in target_dataset.name.lower():
+            config.dataset.target.train_size = 1000
+        elif "cifar10" in target_dataset.name.lower():
+            config.dataset.target.train_size = 4000
+        else:
+            config.dataset.target.train_size = int(target_ds_len * .85)
         config.dataset.source.train_size = int((source_ds_len) * pct)
 
         config.dataset.target.val_size = int(target_ds_len * .1)

@@ -758,11 +758,15 @@ class PreloaderTrainer:
                         loss = nn.MSELoss()(output, combined_input)
                         total_loss += loss
 
+                log_message = f"\tAE Epoch {epoch+1}: {loss:.4f}"
+
                 total_loss /= len(self.val_loader)
                 if total_loss < best_ae_val:
+                    log_message += " <- New Best"
                     best_ae_val = total_loss
                     torch.save(self.autoencoder.state_dict(), ae_filename)
 
+        logger.info(log_message)
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
 
         unet_optimizer = optim.Adam(self.unet.parameters(), lr=1e-3, weight_decay=1e-5)
@@ -800,7 +804,7 @@ class PreloaderTrainer:
                     train=False
                 )
 
-            log_message = f"\tEpoch {epoch+1}: {epoch_loss:.4f}"
+            log_message = f"\tUNET Epoch {epoch+1}: {epoch_loss:.4f}"
 
             if epoch_loss < best_unet_val:
                 log_message += " <- New Best"

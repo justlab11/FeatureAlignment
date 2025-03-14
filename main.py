@@ -52,7 +52,7 @@ def main(config_fname):
     CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}"
 
     # data size info
-    TARGET_SIZE: int = CONFIG.dataset.source.train_size
+    TARGET_SIZE: int = CONFIG.dataset.target.train_size
     SOURCE_SIZE: int = CONFIG.dataset.source.train_size
 
     build_unet: Callable = helpers.make_unet(
@@ -76,7 +76,7 @@ def main(config_fname):
     np.random.seed(CONFIG.dataset.rng_seed)
 
     # start logging
-    log_location: str = os.path.join(log_folder, f"run_{CLASSIFIER_ID}.log")
+    log_location: str = os.path.join(log_folder, f"run_{CLASSIFIER_ID}_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.log")
     level: int = logging.DEBUG if CONFIG.verbose else logging.INFO
 
     logging.basicConfig(
@@ -225,20 +225,20 @@ def main(config_fname):
         dataloaders=dl_set
     )
 
-    baseline_model_trainer.unet_preloader_train_loop(
-        ae_filename=baseline_ae_filename,
-        unet_filename=baseline_unet_filename,
-        device=DEVICE,
-        train_both=True
-    )
+    #baseline_model_trainer.unet_preloader_train_loop(
+    #    ae_filename=baseline_ae_filename,
+    #    unet_filename=baseline_unet_filename,
+    #    device=DEVICE,
+    #    train_both=True
+    #)
 
-    baseline_model_trainer.classification_train_loop(
-        classifier_filename=baseline_classifier_filename,
-        device=DEVICE,
-        num_epochs=100
-    )
+    #baseline_model_trainer.classification_train_loop(
+    #    classifier_filename=baseline_classifier_filename,
+    #    device=DEVICE,
+    #    num_epochs=100
+    #)
 
-    baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
+    #baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
@@ -345,7 +345,7 @@ def main(config_fname):
     )
     contrast_model_trainer.classifier = contrast_model
 
-    logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
+    #logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
     base_acc: float = base_model_trainer.evaluate_model(DEVICE)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
@@ -475,13 +475,6 @@ def main(config_fname):
     base_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_base_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     mixed_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_mixed_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     contrast_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_contrast_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
-
-    plotters.plot_examples(
-        dataset=val_ds,
-        unet_model=None,
-        filename=base_example_file,
-        device=DEVICE
-    )
 
     plotters.plot_examples(
         dataset=train_ds,
