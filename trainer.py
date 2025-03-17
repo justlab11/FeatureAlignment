@@ -124,7 +124,7 @@ class Trainer:
         filter_model.eval()
 
         optimizer = optim.Adam(
-            self.classifier.parameters() + self.unet.parameters(),
+            list(self.classifier.parameters()) + list(self.unet.parameters()),
             lr = 3e-3,
             weight_decay = 1e-5
         )
