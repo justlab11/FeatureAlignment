@@ -1,5 +1,6 @@
 import subprocess
 import itertools
+import sys
 import click
 import yaml
 import glob
@@ -125,13 +126,15 @@ def main(config_fname):
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
 
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(sys.path)
+
         subprocess.run([
             "python",
             "main.py",
             "--config_fname",
             fname
-        ])
-
+        ], env=env)
 
 if __name__=="__main__":
     main()
