@@ -108,6 +108,7 @@ class Trainer:
             logger.info(log_message)
 
         self.classifier.load_state_dict(torch.load(filename, weights_only=True))
+        return best_val
 
     def evaluate_model(self, device):
         _, val_acc = self._classification_run(
@@ -123,7 +124,43 @@ class Trainer:
         return val_acc
     
     def cascading_train_loop(self, classifier_fname, unet_fname, device, num_epochs=100):
-        pass
+        num_layers = self.classifier.get_num_layers()
+        layers = [i for i in range(num_layers)]
+
+        best_layer_val = 1e7
+        best_layer = 1000
+
+        for i in range(1, num_layers+1):
+            layer_set = layers[-i:]
+            start_layer = layer_set[0] # get the first layer we use for the set
+            classifier_layer_fname = classifier_fname[:-3] + f"-{start_layer}.pt"
+            unet_layer_fname = unet_fname[:-3] + f"-{start_layer}.pt"
+
+            unet_val = self._cascade_unet_train_loop(
+                layers=layer_set,
+                device=device,
+                unet_fname=unet_layer_fname,
+                epochs=num_epochs
+            )
+
+            classifier_val = self.classification_train_loop(
+                filename=classifier_layer_fname,
+                device=device,
+                mode="safauk",
+                num_epochs=num_epochs
+            )
+
+            if classifier_val < best_layer_val:
+                best_layer_val = classifier_val
+                best_layer = start_layer
+
+        logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1}")
+        classifier_best_fname = classifier_fname[:-3] + f"-{best_layer}.pt"
+        unet_best_fname = unet_fname[:-3] + f"-{best_layer}.pt"
+
+        self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
+        self.unet.load_state_dict(torch.load(unet_best_fname, weights_only=True))
+
 
     def _cascade_unet_train_loop(self, layers, device, unet_fname, epochs=100):
         """
@@ -201,6 +238,9 @@ class Trainer:
                 log_message += " <- New Best"
                 torch.save(self.unet.state_dict(unet_fname))
 
+            logger.info(log_message)
+
+        self.unet.load_state_dict(torch.load(unet_fname, weights_only=True))
     
     def unet_train_loop(self, filename, device, num_epochs=20):
         optimizer = optim.Adam(

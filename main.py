@@ -404,61 +404,84 @@ def main(config_fname):
     )
 
     logger.info("\nSTARTING UNET/CLASSIFER TRAIN CYCLES\n------------------------------------")
-
     logger.info("Training UNET/Classifier for Mixed Model")
+
     mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-
+    
     mixed_model_trainer.unet = build_unet()
-
-    mixed_model_trainer.unet_classifier_train_loop(
-        unet_filename=mixed_unet_final_fname,
-        classifier_filename=mixed_classifier_final_fname,
-        batch_size=BATCH_SIZE,
+    
+    mixed_model_trainer.cascading_train_loop(
+        classifier_fname=mixed_classifier_final_fname,
+        unet_fname=mixed_unet_final_fname,
         device=DEVICE,
     )
 
-    logger.info("Training UNET/Classifier for Contrast Model")
+    # logger.info("Training UNET/Classifier for Mixed Model")
+    # mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+
+    # mixed_model_trainer.unet = build_unet()
+
+    # mixed_model_trainer.unet_classifier_train_loop(
+    #     unet_filename=mixed_unet_final_fname,
+    #     classifier_filename=mixed_classifier_final_fname,
+    #     batch_size=BATCH_SIZE,
+    #     device=DEVICE,
+    # )
+
+    # logger.info("Training UNET/Classifier for Contrast Model")
+    # contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+
+    # contrast_model_trainer.unet = build_unet()
     contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-
-    contrast_model_trainer.unet = build_unet()
-
-    contrast_model_trainer.unet_classifier_train_loop(
-        unet_filename=contrast_unet_final_fname,
-        classifier_filename=contrast_classifier_final_fname,
-        batch_size=BATCH_SIZE,
+    
+    mixed_model_trainer.unet = build_unet()
+    
+    contrast_model_trainer.cascading_train_loop(
+        classifier_fname=contrast_classifier_final_fname,
+        unet_fname=contrast_unet_final_fname,
         device=DEVICE,
     )
+
+
+    # contrast_model_trainer.unet_classifier_train_loop(
+    #     unet_filename=contrast_unet_final_fname,
+    #     classifier_filename=contrast_classifier_final_fname,
+    #     batch_size=BATCH_SIZE,
+    #     device=DEVICE,
+    # )
 
     logger.info("\nGetting Model Accuracy With UNET Models")
 
-    mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    # contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    mixed_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    mixed_model.load_state_dict(torch.load(mixed_classifier_final_fname, weights_only=True))
-    mixed_unet = build_unet()
-    mixed_unet.load_state_dict(torch.load(mixed_unet_final_fname, weights_only=True))
+    # mixed_model = models.DynamicResNet(
+    #     resnet_type=CONFIG.classifier.model,
+    #     num_classes=10
+    # )
+    # mixed_model.load_state_dict(torch.load(mixed_classifier_final_fname, weights_only=True))
+    # mixed_unet = build_unet()
+    # mixed_unet.load_state_dict(torch.load(mixed_unet_final_fname, weights_only=True))
 
-    mixed_model_trainer.classifier = mixed_model
-    mixed_model_trainer.unet = mixed_unet
+    # mixed_model_trainer.classifier = mixed_model
+    # mixed_model_trainer.unet = mixed_unet
 
-    contrast_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    contrast_model.load_state_dict(torch.load(contrast_classifier_final_fname, weights_only=True))
-    contrast_unet = build_unet()
-    contrast_unet.load_state_dict(torch.load(contrast_unet_final_fname, weights_only=True))
+    # contrast_model = models.DynamicResNet(
+    #     resnet_type=CONFIG.classifier.model,
+    #     num_classes=10
+    # )
+    # contrast_model.load_state_dict(torch.load(contrast_classifier_final_fname, weights_only=True))
+    # contrast_unet = build_unet()
+    # contrast_unet.load_state_dict(torch.load(contrast_unet_final_fname, weights_only=True))
 
-    contrast_model_trainer.classifier = contrast_model
-    contrast_model_trainer.unet = contrast_unet
+    # contrast_model_trainer.classifier = contrast_model
+    # contrast_model_trainer.unet = contrast_unet
 
     # logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
