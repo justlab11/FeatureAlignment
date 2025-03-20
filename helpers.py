@@ -207,6 +207,7 @@ def compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device):
 
     if layer == len(base_reps) - 1:  # Output layer
         base_normed = F.one_hot(labels, base_reshaped.size(1))
+        base_normed = base_normed.float()
         aux_normed = F.softmax(aux_reshaped, dim=1)
     else:  # Intermediate layers
         base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True)

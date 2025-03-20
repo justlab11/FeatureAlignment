@@ -132,6 +132,7 @@ class Trainer:
 
         for i in range(1, num_layers+1):
             layer_set = layers[-i:]
+            logger.info(f"COVERING LAYERS: {layer_set}\n")
             start_layer = layer_set[0] # get the first layer we use for the set
             classifier_layer_fname = classifier_fname[:-3] + f"-{start_layer}.pt"
             unet_layer_fname = unet_fname[:-3] + f"-{start_layer}.pt"
@@ -188,7 +189,7 @@ class Trainer:
             for param in self.classifier.parameters():
                 param.requires_grad = False
 
-            self.unet_model.train()
+            self.unet.train()
             running_loss = 0
             for base_samples, aux_samples, labels in self.train_loader:
                 base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device, dtype=torch.int64)
@@ -236,7 +237,7 @@ class Trainer:
             if val_loss < unet_best_val:
                 unet_best_val = val_loss
                 log_message += " <- New Best"
-                torch.save(self.unet.state_dict(unet_fname))
+                torch.save(self.unet.state_dict(), unet_fname)
 
             logger.info(log_message)
 
