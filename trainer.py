@@ -13,6 +13,7 @@ from helpers import compute_layer_loss
 from losses import supervised_contrastive_loss, ISEBSW
 from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
+from plotters import plot_examples
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class Trainer:
 
         return val_acc
     
-    def cascading_train_loop(self, classifier_fname, unet_fname, device, num_epochs=100):
+    def cascading_train_loop(self, classifier_fname, unet_fname, examples_fname, device, num_epochs=100):
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
 
@@ -136,12 +137,20 @@ class Trainer:
             start_layer = layer_set[0] # get the first layer we use for the set
             classifier_layer_fname = classifier_fname[:-3] + f"-{start_layer}.pt"
             unet_layer_fname = unet_fname[:-3] + f"-{start_layer}.pt"
+            unet_layer_examples_fname = examples_fname[:-4] + f"-{start_layer}.pdf"
 
             unet_val = self._cascade_unet_train_loop(
                 layers=layer_set,
                 device=device,
                 unet_fname=unet_layer_fname,
                 epochs=num_epochs
+            )
+
+            plot_examples(
+                dataset=self.train_loader.dataset,
+                unet_model=self.unet,
+                filename=unet_layer_examples_fname,
+                device=device
             )
 
             classifier_val = self.classification_train_loop(
@@ -163,6 +172,9 @@ class Trainer:
         self.unet.load_state_dict(torch.load(unet_best_fname, weights_only=True))
 
     def _cascade_unet_train_loop(self, layers, device, unet_fname, epochs=100):
+        """
+        Fully retrain the U-Net model and classifier through one layer of the classifier network.
+        """
         criterion = ISEBSW
         self.unet.to(device)
         self.classifier.to(device)
@@ -174,10 +186,10 @@ class Trainer:
         unet_optimizer = optim.Adam(self.unet.parameters(), lr=3e-4, weight_decay=1e-5)
         unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=epochs, eta_min=1e-6)
 
-        unet_best_val = 1e7
+        unet_best_val = float('inf')
 
         unique_classes = list(self.train_loader.dataset.base_dataset.class_samples.keys())
-        
+
         for epoch in range(epochs):
             self.unet.train()
             epoch_loss = 0
@@ -186,13 +198,18 @@ class Trainer:
             # Shuffle the order of classes for each epoch
             np.random.shuffle(unique_classes)
 
+            # Training loop (classwise)
             for cls in unique_classes:
                 self.train_loader.dataset.specific_class = cls
                 class_loss = 0
                 class_samples = 0
 
                 for base_samples, aux_samples, labels in self.train_loader:
-                    base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device, dtype=torch.int64)
+                    base_samples, aux_samples, labels = (
+                        base_samples.to(device),
+                        aux_samples.to(device),
+                        labels.to(device, dtype=torch.int64),
+                    )
 
                     unet_optimizer.zero_grad()
 
@@ -200,7 +217,10 @@ class Trainer:
                     base_reps = self.classifier(base_samples)
                     aux_reps = self.classifier(unet_output)
 
-                    loss = sum(compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device) for layer in layers)
+                    loss = sum(
+                        compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device)
+                        for layer in layers
+                    )
 
                     loss.backward()
                     unet_optimizer.step()
@@ -210,42 +230,59 @@ class Trainer:
 
                 epoch_loss += class_loss
                 samples_count += class_samples
-                logger.info(f"Epoch {epoch+1}, Class {cls}: Loss = {class_loss/class_samples:.4f}")
+                logger.info(f"Epoch {epoch+1}, Class {cls}: Train Loss = {class_loss / class_samples:.4f}")
 
             train_loss = epoch_loss / samples_count
             unet_scheduler.step()
 
-            # Validation
+            # Validation loop (classwise)
             self.unet.eval()
-            val_loss = 0
-            val_samples = 0
-            self.val_loader.dataset.specific_class = None  # Use all classes for validation
+            val_loss_total = 0
+            val_samples_total = 0
 
-            with torch.no_grad():
-                for base_samples, aux_samples, labels in self.val_loader:
-                    base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device, dtype=torch.int64)
+            for cls in unique_classes:
+                self.val_loader.dataset.specific_class = cls
+                class_val_loss = 0
+                class_val_samples = 0
 
-                    unet_output = self.unet(aux_samples)[-1]
-                    base_reps = self.classifier(base_samples)
-                    aux_reps = self.classifier(unet_output)
+                with torch.no_grad():
+                    for base_samples, aux_samples, labels in self.val_loader:
+                        base_samples, aux_samples, labels = (
+                            base_samples.to(device),
+                            aux_samples.to(device),
+                            labels.to(device, dtype=torch.int64),
+                        )
 
-                    loss = sum(compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device) for layer in layers)
+                        unet_output = self.unet(aux_samples)[-1]
+                        base_reps = self.classifier(base_samples)
+                        aux_reps = self.classifier(unet_output)
 
-                    val_loss += loss.item() * base_samples.size(0)
-                    val_samples += base_samples.size(0)
+                        loss = sum(
+                            compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device)
+                            for layer in layers
+                        )
 
-            val_loss /= val_samples
+                        class_val_loss += loss.item() * base_samples.size(0)
+                        class_val_samples += base_samples.size(0)
 
-            log_message = f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}"
+                val_loss_total += class_val_loss
+                val_samples_total += class_val_samples
 
-            if val_loss < unet_best_val:
-                unet_best_val = val_loss
+                logger.info(f"Epoch {epoch+1}, Class {cls}: Val Loss = {class_val_loss / class_val_samples:.4f}")
+
+            val_loss_avg = val_loss_total / val_samples_total
+
+            log_message = f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Avg Val Loss = {val_loss_avg:.4f}"
+
+            if val_loss_avg < unet_best_val:
+                unet_best_val = val_loss_avg
                 log_message += " <- New Best"
                 torch.save(self.unet.state_dict(), unet_fname)
 
             logger.info(log_message)
 
-        self.unet.load_state_dict(torch.load(unet_fname, weights_only=True))
+        # Load the best model weights at the end of training
+        self.unet.load_state_dict(torch.load(unet_fname))
 
     def unet_train_loop(self, filename, device, num_epochs=20):
         optimizer = optim.Adam(

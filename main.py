@@ -408,12 +408,14 @@ def main(config_fname):
 
     mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    
+    mixed_examples_fname = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_mixed_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+
     mixed_model_trainer.unet = build_unet()
     
     mixed_model_trainer.cascading_train_loop(
         classifier_fname=mixed_classifier_final_fname,
         unet_fname=mixed_unet_final_fname,
+        examples_fname=mixed_examples_fname,
         device=DEVICE,
     )
 
@@ -437,12 +439,14 @@ def main(config_fname):
     # contrast_model_trainer.unet = build_unet()
     contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    
-    mixed_model_trainer.unet = build_unet()
+    contrast_examples_fname = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_contrast_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+
+    contrast_model_trainer.unet = build_unet()
     
     contrast_model_trainer.cascading_train_loop(
         classifier_fname=contrast_classifier_final_fname,
         unet_fname=contrast_unet_final_fname,
+        examples_fname=contrast_examples_fname,
         device=DEVICE,
     )
 
@@ -495,7 +499,7 @@ def main(config_fname):
     logger.info(f"Contrastive Model Accuracy w/ UNET: {round(contrast_acc*100, 2)}%")
 
     logger.info("Generating Image Example Plots")
-    base_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_base_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    # base_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_base_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     mixed_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_mixed_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     contrast_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_contrast_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
