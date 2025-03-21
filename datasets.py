@@ -117,33 +117,44 @@ class CombinedDataset(Dataset):
         self.base_dataset = base_dataset
         self.aux_dataset = aux_dataset
         self.unique_sources = True
+        self.specific_class = None  # Default to using all classes
 
     def __len__(self):
+        if self.specific_class is not None:
+            # Only count samples from the specific class
+            return len(self.base_dataset.class_samples[self.specific_class])
         return len(self.base_dataset)
 
     def __getitem__(self, index):
-        base_file_path = self.base_dataset.get_file_path(index)
+        if self.specific_class is not None:
+            # Use indices for the specific class
+            base_idx = self.base_dataset.class_samples[self.specific_class][index]
+        else:
+            # Use all indices
+            base_idx = index
+
+        base_file_path = self.base_dataset.get_file_path(base_idx)
         base_image = Image.open(base_file_path)
-        
+
         if self.base_dataset.base_dataset.transform is not None:
             base_image = self.base_dataset.base_dataset.transform(base_image)
-        
-        label = self.base_dataset.base_dataset.samples[self.base_dataset.indices[index]][1]
-        
+
+        label = self.base_dataset.base_dataset.samples[self.base_dataset.indices[base_idx]][1]
+
         pair_selection = np.random.uniform()
-        
+
         if self.unique_sources or pair_selection < 0.5:
             aux_idx = np.random.choice(self.aux_dataset.class_samples[label])
             aux_file_path = self.aux_dataset.get_file_path(aux_idx)
             aux_image = Image.open(aux_file_path)
-            
+
             if self.aux_dataset.base_dataset.transform is not None:
                 aux_image = self.aux_dataset.base_dataset.transform(aux_image)
         elif pair_selection < 0.75:
             base_idx = np.random.choice(self.base_dataset.class_samples[label])
             aux_file_path = self.base_dataset.get_file_path(base_idx)
             aux_image = Image.open(aux_file_path)
-            
+
             if self.base_dataset.base_dataset.transform is not None:
                 aux_image = self.base_dataset.base_dataset.transform(aux_image)
         else:
@@ -152,18 +163,18 @@ class CombinedDataset(Dataset):
             base_file_path = self.aux_dataset.get_file_path(aux_idx1)
             aux_file_path = self.aux_dataset.get_file_path(aux_idx2)
             base_image = Image.open(base_file_path)
-            
+
             if self.aux_dataset.base_dataset.transform is not None:
                 base_image = self.aux_dataset.base_dataset.transform(base_image)
             aux_image = Image.open(aux_file_path)
-            
+
             if self.aux_dataset.base_dataset.transform is not None:
                 aux_image = self.aux_dataset.base_dataset.transform(aux_image)
-        
+
         label = float(label)
 
         return base_image, aux_image, label
-
+    
 class PairedMNISTDataset(Dataset):
     """
     Dataset for the paired MNIST digits. The dataset pairs a set of images with the same class from the two datasets.
