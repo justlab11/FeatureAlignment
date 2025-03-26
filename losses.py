@@ -198,4 +198,4 @@ def ISEBSW(X, Y, L=10, p=2, device="cpu"):
     wasserstein_distances =  wasserstein_distances.view(1,L)
     weights = torch.softmax(wasserstein_distances,dim=1)
     sw = torch.sum(weights*wasserstein_distances,dim=1).mean()
-    return  torch.pow(sw,1./p)
+    return  torch.pow(sw,1./p) + 1e-8

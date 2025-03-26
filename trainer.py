@@ -281,6 +281,9 @@ class Trainer:
 
             logger.info(log_message)
 
+        self.train_loader.dataset.specific_class = None
+        self.val_loader.dataset.specific_class = None
+
         # Load the best model weights at the end of training
         self.unet.load_state_dict(torch.load(unet_fname))
 
