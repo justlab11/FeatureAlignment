@@ -1,17 +1,15 @@
 import torch
-from torchvision import transforms
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
-import numpy as np 
 import logging
-from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
+import random
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 
 from models import DynamicCNN
 from helpers import compute_layer_loss
 from losses import supervised_contrastive_loss, ISEBSW
-from datasets import CombinedDataset, HEIFFolder, IndexedDataset
+from datasets import CombinedDataset, IndexedDataset
 from type_defs import DataLoaderSet
 from plotters import plot_examples
 
@@ -195,42 +193,59 @@ class Trainer:
             epoch_loss = 0
             samples_count = 0
 
-            # Shuffle the order of classes for each epoch
-            np.random.shuffle(unique_classes)
+            # Create a dictionary to store class-specific data and iterators
+            class_data = {cls: {'loss': 0, 'samples': 0, 'iterator': None} for cls in unique_classes}
 
-            # Training loop (classwise)
+            # Create separate data loaders for each class
             for cls in unique_classes:
                 self.train_loader.dataset.specific_class = cls
-                class_loss = 0
-                class_samples = 0
+                class_data[cls]['iterator'] = iter(self.train_loader)
 
-                for base_samples, aux_samples, labels in self.train_loader:
-                    base_samples, aux_samples, labels = (
-                        base_samples.to(device),
-                        aux_samples.to(device),
-                        labels.to(device, dtype=torch.int64),
-                    )
+            active_classes = set(unique_classes)
 
-                    unet_optimizer.zero_grad()
+            while active_classes:
+                # Randomly select a class from active classes
+                current_class = random.choice(list(active_classes))
 
-                    unet_output = self.unet(aux_samples)[-1]
-                    base_reps = self.classifier(base_samples)
-                    aux_reps = self.classifier(unet_output)
+                try:
+                    base_samples, aux_samples, labels = next(class_data[current_class]['iterator'])
+                except StopIteration:
+                    # This class has no more samples, remove it from active classes
+                    active_classes.remove(current_class)
+                    continue
 
-                    loss = sum(
-                        compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device)
-                        for layer in layers
-                    )
+                base_samples, aux_samples, labels = (
+                    base_samples.to(device),
+                    aux_samples.to(device),
+                    labels.to(device, dtype=torch.int64),
+                )
 
-                    loss.backward()
-                    unet_optimizer.step()
+                unet_optimizer.zero_grad()
 
-                    class_loss += loss.item() * base_samples.size(0)
-                    class_samples += base_samples.size(0)
+                unet_output = self.unet(aux_samples)[-1]
+                base_reps = self.classifier(base_samples)
+                aux_reps = self.classifier(unet_output)
 
-                epoch_loss += class_loss
-                samples_count += class_samples
-                logger.info(f"Epoch {epoch+1}, Class {cls}: Train Loss = {class_loss / class_samples:.4f}")
+                loss = sum(
+                    compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device)
+                    for layer in layers
+                )
+
+                loss.backward()
+                unet_optimizer.step()
+
+                # Update class-specific and overall statistics
+                class_data[current_class]['loss'] += loss.item() * base_samples.size(0)
+                class_data[current_class]['samples'] += base_samples.size(0)
+                epoch_loss += loss.item() * base_samples.size(0)
+                samples_count += base_samples.size(0)
+
+            # After the epoch, calculate and log the results
+            for cls in unique_classes:
+                class_loss = class_data[cls]['loss']
+                class_samples = class_data[cls]['samples']
+                if class_samples > 0:
+                    logger.info(f"Epoch {epoch+1}, Class {cls}: Train Loss = {class_loss / class_samples:.4f}")
 
             train_loss = epoch_loss / samples_count
             unet_scheduler.step()
