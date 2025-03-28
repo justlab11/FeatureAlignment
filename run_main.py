@@ -31,7 +31,7 @@ TEMPLATE_YAML = {
         },
         "image_size": "small",
         "rng_seed": 72,
-        "batch_size": 64,
+        "batch_size": 128,
     },
     "save_locations": {
         "model_folder": "models",

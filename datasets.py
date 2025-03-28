@@ -88,16 +88,17 @@ class HEIFFolder(Dataset):
         return self.idx_to_class
     
 class IndexedDataset(Dataset):
-    def __init__(self, base_dataset, indices=None):
-        self.base_dataset = base_dataset
-        self.indices = indices if indices is not None else list(range(len(base_dataset)))
+    def __init__(self, dataset, indices=None):
+        self.dataset = dataset
+        self.indices = indices if indices is not None else list(range(len(dataset)))
         self.class_samples = self._build_class_samples()
-        self.file_paths = [self.base_dataset.samples[i][0] for i in self.indices]
+        self.file_paths = [self.dataset.samples[i][0] for i in self.indices]
 
     def _build_class_samples(self):
         class_samples = {}
         for idx, original_idx in enumerate(self.indices):
-            _, label = self.base_dataset.samples[original_idx]
+            _, label = self.dataset.samples[original_idx]
+            label = int(label)
             if label not in class_samples:
                 class_samples[label] = []
             class_samples[label].append(idx)
@@ -107,7 +108,7 @@ class IndexedDataset(Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        return self.base_dataset[self.indices[idx]]
+        return self.dataset[self.indices[idx]]
 
     def get_file_path(self, idx):
         return self.file_paths[idx]
@@ -125,40 +126,19 @@ class CombinedDataset(Dataset):
         base_file_path = self.base_dataset.get_file_path(index)
         base_image = Image.open(base_file_path)
         
-        if self.base_dataset.base_dataset.transform is not None:
-            base_image = self.base_dataset.base_dataset.transform(base_image)
+        if self.base_dataset.dataset.transform is not None:
+            base_image = self.base_dataset.dataset.transform(base_image)
         
-        label = self.base_dataset.base_dataset.samples[self.base_dataset.indices[index]][1]
+        label = self.base_dataset.dataset.samples[self.base_dataset.indices[index]][1]
+        label = int(label)
+
+
+        aux_idx = np.random.choice(self.aux_dataset.class_samples[label])
+        aux_file_path = self.aux_dataset.get_file_path(aux_idx)
+        aux_image = Image.open(aux_file_path)
         
-        pair_selection = np.random.uniform()
-        
-        if self.unique_sources or pair_selection < 0.5:
-            aux_idx = np.random.choice(self.aux_dataset.class_samples[label])
-            aux_file_path = self.aux_dataset.get_file_path(aux_idx)
-            aux_image = Image.open(aux_file_path)
-            
-            if self.aux_dataset.base_dataset.transform is not None:
-                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
-        elif pair_selection < 0.75:
-            base_idx = np.random.choice(self.base_dataset.class_samples[label])
-            aux_file_path = self.base_dataset.get_file_path(base_idx)
-            aux_image = Image.open(aux_file_path)
-            
-            if self.base_dataset.base_dataset.transform is not None:
-                aux_image = self.base_dataset.base_dataset.transform(aux_image)
-        else:
-            aux_idx1 = np.random.choice(self.aux_dataset.class_samples[label])
-            aux_idx2 = np.random.choice(self.aux_dataset.class_samples[label])
-            base_file_path = self.aux_dataset.get_file_path(aux_idx1)
-            aux_file_path = self.aux_dataset.get_file_path(aux_idx2)
-            base_image = Image.open(base_file_path)
-            
-            if self.aux_dataset.base_dataset.transform is not None:
-                base_image = self.aux_dataset.base_dataset.transform(base_image)
-            aux_image = Image.open(aux_file_path)
-            
-            if self.aux_dataset.base_dataset.transform is not None:
-                aux_image = self.aux_dataset.base_dataset.transform(aux_image)
+        if self.aux_dataset.dataset.transform is not None:
+            aux_image = self.aux_dataset.dataset.transform(aux_image)
         
         label = float(label)
 
