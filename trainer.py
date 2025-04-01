@@ -260,7 +260,33 @@ class ClassifierTrainer:
         
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
-        return best_val_loss        
+        return best_val_loss      
+
+    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=100, best_temp=None):
+        # Step 1: Optimize temperature and train body
+        if best_temp == None:
+            best_temp, best_val_loss = self._optimize_temperature(temp_range, device, filename, num_epochs)
+        
+            logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
+        
+        # Load the best model
+        self.classifier.load_state_dict(torch.load(filename, weights_only=True))
+        
+        # Step 2: Freeze body and train head
+        self.classifier.set_freeze_head(False)
+        self.classifier.set_freeze_body(True)
+        
+        # Train the head
+        head_filename = filename.replace('body', 'full')
+        self.classification_train_loop(head_filename, device, num_epochs=100)
+        
+        # Optionally, unfreeze everything for potential fine-tuning
+        self.classifier.set_freeze_head(False)
+        self.classifier.set_freeze_body(False)
+
+        logger.info("Contrastive training and head training completed.")
+        return best_temp
+
 
     def evaluate_model(self, device, use_unet=False):
         val_loss, val_acc = self._classification_run(

@@ -138,28 +138,28 @@ def main(config_fname):
     source_test_inds: np.ndarray = source_inds[source_train_size+source_val_size:]
 
     target_train_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=target_full_dataset,
+        dataset=target_full_dataset,
         indices=target_train_inds
     )
     target_test_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=target_full_dataset,
+        dataset=target_full_dataset,
         indices=target_test_inds
     )
     target_val_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=target_full_dataset,
+        dataset=target_full_dataset,
         indices=target_val_inds
     )
 
     source_train_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=source_full_dataset,
+        dataset=source_full_dataset,
         indices=source_train_inds
     )
     source_test_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=source_full_dataset,
+        dataset=source_full_dataset,
         indices=source_test_inds
     )
     source_val_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        base_dataset=source_full_dataset,
+        dataset=source_full_dataset,
         indices=source_val_inds
     )
 
@@ -183,15 +183,15 @@ def main(config_fname):
     logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Source: {len(source_val_ds)})")
 
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True
+        test_ds, batch_size=BATCH_SIZE, shuffle=False
     )
 
     cls_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True
+        val_ds, batch_size=BATCH_SIZE, shuffle=False
     )
 
     cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
@@ -222,15 +222,15 @@ def main(config_fname):
     )
 
     align_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True
+        train_ds, batch_sampler=train_sampler, num_workers=2
     )
 
     align_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_sampler=test_sampler, num_workers=2, pin_memory=True
+        test_ds, batch_sampler=test_sampler
     )
 
     align_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_sampler=val_sampler, num_workers=2, pin_memory=True
+        val_ds, batch_sampler=val_sampler
     )
 
     align_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
@@ -283,80 +283,77 @@ def main(config_fname):
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    if not os.path.exists(base_model_file):
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=10,
-        )
+    model: models.DynamicResNet = models.DynamicResNet(
+        resnet_type=CONFIG.classifier.model,
+        num_classes=10,
+    )
 
-        unet = build_unet()
+    unet = build_unet()
 
-        base_model_trainer = trainer.FullTrainer(
-            classifier=model,
-            unet=unet,
-            classifier_dataloaders=cls_dl_set,
-            unet_dataloaders=align_dl_set
-        )
+    base_model_trainer = trainer.FullTrainer(
+        classifier=model,
+        unet=unet,
+        classifier_dataloaders=cls_dl_set,
+        unet_dataloaders=align_dl_set
+    )
 
-        base_model_trainer.classifier_trainer.classification_train_loop(
-            classifier_filename = base_model_file,
-            device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
-            target_only=True,
-            use_unet=False
-        )
+    base_model_trainer.classifier_trainer.classification_train_loop(
+        classifier_filename = base_model_file,
+        device=DEVICE,
+        num_epochs=CONFIG.classifier.num_epochs,
+        target_only=True,
+        use_unet=False
+    )
 
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    if not os.path.exists(mixed_model_file):
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=10,
-        )
+    model: models.DynamicResNet = models.DynamicResNet(
+        resnet_type=CONFIG.classifier.model,
+        num_classes=10,
+    )
 
-        unet = build_unet()
+    unet = build_unet()
 
-        mixed_model_trainer = trainer.FullTrainer(
-            classifier=model,
-            unet=unet,
-            classifier_dataloaders=cls_dl_set,
-            unet_dataloaders=align_dl_set
-        )
+    mixed_model_trainer = trainer.FullTrainer(
+        classifier=model,
+        unet=unet,
+        classifier_dataloaders=cls_dl_set,
+        unet_dataloaders=align_dl_set
+    )
 
-        mixed_model_trainer.classifier_trainer.classification_train_loop(
-            classifier_filename = mixed_model_file,
-            device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
-            target_only=False,
-            use_unet=False
-        )
+    mixed_model_trainer.classifier_trainer.classification_train_loop(
+        classifier_filename = mixed_model_file,
+        device=DEVICE,
+        num_epochs=CONFIG.classifier.num_epochs,
+        target_only=False,
+        use_unet=False
+    )
 
     logger.info("\nTraining Contrastive Model")
     contrast_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_body_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_full_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    if not os.path.exists(contrast_full_model_file): 
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=10
-        )
+    model: models.DynamicResNet = models.DynamicResNet(
+        resnet_type=CONFIG.classifier.model,
+        num_classes=10
+    )
 
-        unet = build_unet()
+    unet = build_unet()
 
-        contrast_model_trainer = trainer.FullTrainer(
-            classifier=model,
-            unet=unet,
-            classifier_dataloaders=cls_dl_set,
-            unet_dataloaders=align_dl_set
-        )
+    contrast_model_trainer = trainer.FullTrainer(
+        classifier=model,
+        unet=unet,
+        classifier_dataloaders=cls_dl_set,
+        unet_dataloaders=align_dl_set
+    )
 
-        best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
-            filename = contrast_model_file,
-            device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
-            temp_range=[0.05],
-        )
+    best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
+        filename = contrast_model_file,
+        device=DEVICE,
+        num_epochs=CONFIG.classifier.num_epochs,
+        temp_range=[0.05],
+    )
 
 
     logger.info("\nGetting Model Accuracy")

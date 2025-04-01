@@ -118,7 +118,7 @@ def main(config_fname):
         config.dataset.source.val_size = int((source_ds_len) * .05)
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 64 if img_size == "small" else 16
+        config.dataset.batch_size = 128 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
 
