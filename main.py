@@ -13,6 +13,7 @@ import transforms as tr
 import plotters
 import models
 import type_defs
+import samplers
 
 @click.command()
 @click.option("--config_fname", help="Config file path for the script (likely in configs folder)")
@@ -181,25 +182,64 @@ def main(config_fname):
     logger.info(f"\tTest Dataset Size: {len(test_ds)} (Target: {len(target_test_ds)}, Source: {len(source_test_ds)})")
     logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Source: {len(source_val_ds)})")
 
-    train_loader = torch.utils.data.DataLoader(
+    cls_train_loader = torch.utils.data.DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True
     )
 
-    test_loader = torch.utils.data.DataLoader(
+    cls_test_loader = torch.utils.data.DataLoader(
         test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True
     )
 
-    val_loader = torch.utils.data.DataLoader(
+    cls_val_loader = torch.utils.data.DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True
     )
 
-    dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
-        train_loader=train_loader,
-        test_loader=test_loader,
-        val_loader=val_loader
+    cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
+        train_loader=cls_train_loader,
+        test_loader=cls_test_loader,
+        val_loader=cls_val_loader
     )
 
-    for x, _, _ in val_loader:
+    train_sampler = samplers.PureBatchSampler(
+        data_source=train_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        drop_last=False
+    )
+
+    test_sampler = samplers.PureBatchSampler(
+        data_source=test_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        drop_last=False
+    )
+
+    val_sampler = samplers.PureBatchSampler(
+        data_source=train_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        drop_last=False
+    )
+
+    align_train_loader = torch.utils.data.DataLoader(
+        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True
+    )
+
+    align_test_loader = torch.utils.data.DataLoader(
+        test_ds, batch_sampler=test_sampler, num_workers=2, pin_memory=True
+    )
+
+    align_val_loader = torch.utils.data.DataLoader(
+        val_ds, batch_sampler=val_sampler, num_workers=2, pin_memory=True
+    )
+
+    align_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
+        train_loader=align_train_loader,
+        test_loader=align_test_loader,
+        val_loader=align_val_loader
+    )
+
+    for x, _, _ in cls_val_loader:
         INPUT_SHAPE = x.shape
         logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
@@ -211,19 +251,19 @@ def main(config_fname):
     baseline_unet_filename = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_baseline_unet_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     baseline_classifier_filename = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_baseline_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    baseline_autoencoder = models.CustomAutoencoder()
-    baseline_unet = build_unet()
-    baseline_classifier = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10,
-    )
+    # baseline_autoencoder = models.CustomAutoencoder()
+    # baseline_unet = build_unet()
+    # baseline_classifier = models.DynamicResNet(
+    #     resnet_type=CONFIG.classifier.model,
+    #     num_classes=10,
+    # )
 
-    baseline_model_trainer = trainer.PreloaderTrainer(
-        autoencoder=baseline_autoencoder,
-        unet = baseline_unet,
-        classifier = baseline_classifier,
-        dataloaders=dl_set
-    )
+    # baseline_model_trainer = trainer.PreloaderTrainer(
+    #     autoencoder=baseline_autoencoder,
+    #     unet = baseline_unet,
+    #     classifier = baseline_classifier,
+    #     dataloaders=cls_dl_set
+    # )
 
     #baseline_model_trainer.unet_preloader_train_loop(
     #    ae_filename=baseline_ae_filename,
@@ -249,16 +289,21 @@ def main(config_fname):
             num_classes=10,
         )
 
-        base_model_trainer: trainer.Trainer = trainer.Trainer(
-            classifier = model,
-            dataloaders=dl_set
+        unet = build_unet()
+
+        base_model_trainer = trainer.FullTrainer(
+            classifier=model,
+            unet=unet,
+            classifier_dataloaders=cls_dl_set,
+            unet_dataloaders=align_dl_set
         )
 
-        base_model_trainer.classification_train_loop(
-            filename = base_model_file,
+        base_model_trainer.classifier_trainer.classification_train_loop(
+            classifier_filename = base_model_file,
             device=DEVICE,
             num_epochs=CONFIG.classifier.num_epochs,
-            mode="base_only"
+            target_only=True,
+            use_unet=False
         )
 
     logger.info("\nTraining Mixed Model")
@@ -267,19 +312,24 @@ def main(config_fname):
     if not os.path.exists(mixed_model_file):
         model: models.DynamicResNet = models.DynamicResNet(
             resnet_type=CONFIG.classifier.model,
-            num_classes=10
+            num_classes=10,
         )
 
-        mixed_model_trainer: trainer.Trainer = trainer.Trainer(
-            classifier = model,
-            dataloaders=dl_set
+        unet = build_unet()
+
+        mixed_model_trainer = trainer.FullTrainer(
+            classifier=model,
+            unet=unet,
+            classifier_dataloaders=cls_dl_set,
+            unet_dataloaders=align_dl_set
         )
 
-        mixed_model_trainer.classification_train_loop(
-            filename = mixed_model_file,
+        mixed_model_trainer.classifier_trainer.classification_train_loop(
+            classifier_filename = mixed_model_file,
             device=DEVICE,
             num_epochs=CONFIG.classifier.num_epochs,
-            mode="mixed",
+            target_only=False,
+            use_unet=False
         )
 
     logger.info("\nTraining Contrastive Model")
@@ -292,17 +342,20 @@ def main(config_fname):
             num_classes=10
         )
 
-        contrast_model_trainer: trainer.Trainer = trainer.Trainer(
-            classifier = model,
-            dataloaders=dl_set,
-            contrastive=True
+        unet = build_unet()
+
+        contrast_model_trainer = trainer.FullTrainer(
+            classifier=model,
+            unet=unet,
+            classifier_dataloaders=cls_dl_set,
+            unet_dataloaders=align_dl_set
         )
 
-        best_temp = contrast_model_trainer.contrastive_train_loop(
+        best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
             filename = contrast_model_file,
             device=DEVICE,
             num_epochs=CONFIG.classifier.num_epochs,
-            temp_range=[0.05, 0.1, 0.15],
+            temp_range=[0.05],
         )
 
 
@@ -311,49 +364,15 @@ def main(config_fname):
     mixed_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_model_file = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    base_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    base_model.load_state_dict(torch.load(base_model_file, weights_only=True))
-    base_model_trainer = trainer.Trainer(
-        classifier = base_model,
-        dataloaders=dl_set
-    )
-    base_model_trainer.classifier = base_model
-
-    mixed_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    mixed_model.load_state_dict(torch.load(mixed_model_file, weights_only=True))
-    mixed_model_trainer = trainer.Trainer(
-        classifier = mixed_model,
-        dataloaders=dl_set
-    )
-    mixed_model_trainer.classifier = mixed_model
-
-    contrast_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    contrast_model.load_state_dict(torch.load(contrast_model_file, weights_only=True))
-    contrast_model_trainer = trainer.Trainer(
-        classifier = contrast_model,
-        dataloaders=dl_set,
-        contrastive=True
-    )
-    contrast_model_trainer.classifier = contrast_model
-
     #logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
-    base_acc: float = base_model_trainer.evaluate_model(DEVICE)
+    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
 
-    mixed_acc: float = mixed_model_trainer.evaluate_model(DEVICE)
+    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
     logger.info(f"Mixed Model Accuracy: {round(mixed_acc*100, 2)}%")
 
-    contrast_acc: float = contrast_model_trainer.evaluate_model(DEVICE)
+    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
     logger.info(f"Contrastive Model Accuracy: {round(contrast_acc*100, 2)}%")
 
     logger.info("\nGenerating TSNE Plot")
@@ -372,8 +391,8 @@ def main(config_fname):
     )
 
     tsne_plotter = plotters.TSNE_Plotter(
-        dataloaders=dl_set,
-        embed_size=mixed_model.get_body_output_size(),
+        dataloaders=cls_dl_set,
+        embed_size=model.get_body_output_size(),
         bs=BATCH_SIZE
     )
 
@@ -390,7 +409,7 @@ def main(config_fname):
     ebsw_plot_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_EBSW_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
-        dataloaders=dl_set,
+        dataloaders=cls_dl_set,
         batch_size=BATCH_SIZE
     )
     num_layers = base_model_trainer.classifier.get_num_layers()
@@ -408,12 +427,12 @@ def main(config_fname):
     logger.info("Training UNET/Classifier for Mixed Model")
     mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    mixed_examples_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    mixed_model_trainer.unet = build_unet()
-
-    mixed_model_trainer.unet_classifier_train_loop(
+    mixed_model_trainer.cascading_train_loop(
         unet_filename=mixed_unet_final_fname,
         classifier_filename=mixed_classifier_final_fname,
+        examples_fname=mixed_examples_final_fname,
         batch_size=BATCH_SIZE,
         device=DEVICE,
     )
@@ -421,58 +440,29 @@ def main(config_fname):
     logger.info("Training UNET/Classifier for Contrast Model")
     contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    contrast_examples_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    contrast_model_trainer.unet = build_unet()
-
-    contrast_model_trainer.unet_classifier_train_loop(
+    contrast_model_trainer.cascading_train_loop(
         unet_filename=contrast_unet_final_fname,
         classifier_filename=contrast_classifier_final_fname,
-        batch_size=BATCH_SIZE,
+        examples_fname=contrast_examples_final_fname,
         device=DEVICE,
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")
 
-    mixed_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    mixed_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}_contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-
-    mixed_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    mixed_model.load_state_dict(torch.load(mixed_classifier_final_fname, weights_only=True))
-    mixed_unet = build_unet()
-    mixed_unet.load_state_dict(torch.load(mixed_unet_final_fname, weights_only=True))
-
-    mixed_model_trainer.classifier = mixed_model
-    mixed_model_trainer.unet = mixed_unet
-
-    contrast_model = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=10
-    )
-    contrast_model.load_state_dict(torch.load(contrast_classifier_final_fname, weights_only=True))
-    contrast_unet = build_unet()
-    contrast_unet.load_state_dict(torch.load(contrast_unet_final_fname, weights_only=True))
-
-    contrast_model_trainer.classifier = contrast_model
-    contrast_model_trainer.unet = contrast_unet
-
     # logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
-    base_acc = base_model_trainer.evaluate_model(DEVICE)
+    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE)
     logger.info(f"Base Model Accuracy w/ UNET: {round(base_acc*100, 2)}%")
 
-    mixed_acc = mixed_model_trainer.evaluate_model(DEVICE)
+    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=True)
     logger.info(f"Mixed Model Accuracy w/ UNET: {round(mixed_acc*100, 2)}%")
 
-    contrast_acc = contrast_model_trainer.evaluate_model(DEVICE)
+    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=True)
     logger.info(f"Contrastive Model Accuracy w/ UNET: {round(contrast_acc*100, 2)}%")
 
     logger.info("Generating Image Example Plots")
-    base_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_base_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     mixed_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_mixed_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
     contrast_example_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}_contrast_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
@@ -513,8 +503,8 @@ def main(config_fname):
     )
 
     tsne_plotter = plotters.TSNE_Plotter(
-        dataloaders=dl_set,
-        embed_size=mixed_model.get_body_output_size(),
+        dataloaders=cls_dl_set,
+        embed_size=model.get_body_output_size(),
         bs=BATCH_SIZE
     )
 
@@ -532,7 +522,7 @@ def main(config_fname):
     ebsw_plot_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
-        dataloaders=dl_set,
+        dataloaders=cls_dl_set,
         batch_size=BATCH_SIZE
     )
     num_layers = base_model_trainer.classifier.get_num_layers()
