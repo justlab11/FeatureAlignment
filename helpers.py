@@ -1,7 +1,7 @@
 import torch
 from torchvision import transforms
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import yaml

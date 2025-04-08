@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np 
+from os import path
 import logging
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
 
@@ -12,7 +13,7 @@ from losses import supervised_contrastive_loss, ISEBSW
 from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
-from plotters import plot_examples
+from plotters import plot_examples, EBSW_Plotter
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +126,6 @@ class ClassifierTrainer:
                         
             for epoch in range(num_epochs):
                 train_loss = self._contrastive_run(
-                    model=self.classifier,
-                    proj_head=self.proj_head,
                     optimizer=optimizer,
                     dataloader=self.train_loader,
                     device=device,
@@ -134,8 +133,6 @@ class ClassifierTrainer:
                 )
                 
                 val_loss = self._contrastive_run(
-                    model=self.classifier,
-                    proj_head=self.proj_head,
                     dataloader=self.val_loader,
                     device=device,
                     train=False,
@@ -206,7 +203,11 @@ class ClassifierTrainer:
         epoch_loss = running_loss / len(dataloader)
         
         return epoch_loss
-
+    
+    def reset_parameters(self, model):
+        for layer in model.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
 
     def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_unet=False):
         optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
@@ -309,6 +310,8 @@ class AlignmentTrainer:
         self.val_loader: DataLoader = dataloaders.val_loader
 
     def cascade_alignment_train_loop(self, layers, device, alignment_fname, epochs=100):
+        torch.save(self.unet.state_dict(), alignment_fname)
+        
         criterion = ISEBSW
         self.unet.to(device)
         self.classifier.to(device)
@@ -321,6 +324,7 @@ class AlignmentTrainer:
         unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=epochs, eta_min=1e-6)
 
         best_val = float('inf')
+        max_norm = 3
 
         for epoch in range(epochs):
             self.unet.train()
@@ -346,6 +350,8 @@ class AlignmentTrainer:
                 )
 
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.unet.parameters(), max_norm)
+
                 unet_optimizer.step()
 
                 train_loss += loss.item() / len(self.train_loader)
@@ -373,9 +379,9 @@ class AlignmentTrainer:
                         for layer in layers
                     )
 
-                epoch_loss += loss.item() / len(self.val_loader)
+                val_loss += loss.item() / len(self.val_loader)
             
-            log_message = f"\tEpoch {epoch+1}: Train- {train_loss}, Val- {val_loss}"
+            log_message = f"\tAlignment Epoch {epoch+1}: Train- {train_loss}, Val- {val_loss}"
             if val_loss < best_val:
                 log_message += " <- New Best"
                 best_val = val_loss
@@ -383,16 +389,17 @@ class AlignmentTrainer:
 
             logger.info(log_message)
         
-        self.unet.load_state_dict(torch.load(alignment_fname, weights_only=True))
+        self.unet.load_state_dict(torch.load(alignment_fname, weights_only=True)) 
 
         return best_val 
 
 class FullTrainer:
-    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders):
+    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder):
         self.classifier = classifier
         self.unet = unet
         self.classifier_dataloaders = classifier_dataloaders
         self.unet_dataloaders = unet_dataloaders
+        self.file_folder = file_folder
 
         self.classifier_trainer = ClassifierTrainer(
             classifier=self.classifier,
@@ -414,6 +421,14 @@ class FullTrainer:
         best_layer_acc = 0
         best_layer = 1000
 
+        inter_layer_distances = []
+        intra_layer_distances = []
+
+        ebsw_plotter = EBSW_Plotter(
+            dataloaders=self.unet_dataloaders,
+            batch_size=self.classifier_dataloaders.train_loader.batch_size
+        )
+
         for i in range(1, num_layers+1):
             layer_set = layers[-i:]
             logger.info(f"COVERING LAYERS: {layer_set}\n")
@@ -422,7 +437,7 @@ class FullTrainer:
             unet_layer_fname = unet_fname[:-3] + f"-{start_layer}.pt"
             unet_layer_examples_fname = examples_fname[:-4] + f"-{start_layer}.pdf"
 
-            unet_val = self.alignment_trainer._cascade_unet_train_loop(
+            unet_val = self.alignment_trainer.cascade_alignment_train_loop(
                 layers=layer_set,
                 device=device,
                 alignment_fname=unet_layer_fname,
@@ -430,7 +445,7 @@ class FullTrainer:
             )
 
             plot_examples(
-                dataset=self.classifier_dataloaders.val.dataset,
+                dataset=self.classifier_dataloaders.val_loader.dataset,
                 unet_model=self.unet,
                 filename=unet_layer_examples_fname,
                 device=device
@@ -442,7 +457,30 @@ class FullTrainer:
                 num_epochs=num_epochs,
                 use_unet=True,
             )
-            
+
+            inter = ebsw_plotter.run_isebsw(
+                model=self.classifier,
+                dataloader=self.unet_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                base_only=True,
+                unet_model=self.unet,
+                num_projections=256
+            )
+
+            intra = ebsw_plotter.run_isebsw(
+                model=self.classifier,
+                dataloader=self.unet_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                base_only=False,
+                unet_model=self.unet,
+                num_projections=256
+            )
+
+            inter_layer_distances.append(inter)
+            intra_layer_distances.append(intra)
+
             classifier_val, classifier_acc = self.classifier_trainer.evaluate_model(
                 device=device,
                 use_unet=True
@@ -459,6 +497,17 @@ class FullTrainer:
 
         self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
         self.unet.load_state_dict(torch.load(unet_best_fname, weights_only=True))
+
+        inter_layer_distances = np.array(inter_layer_distances)
+        intra_layer_distances = np.array(intra_layer_distances)
+
+        np.save(
+            path.join(self.file_folder, "inter_layer_distances.npy"), inter_layer_distances
+        )
+
+        np.save(
+            path.join(self.file_folder, "intra_layer_distances.npy"), intra_layer_distances
+        )
 
 class Trainer:
     """

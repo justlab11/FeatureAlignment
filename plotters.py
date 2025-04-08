@@ -245,7 +245,6 @@ class EBSW_Plotter:
         self.batch_size = batch_size
 
     def run_isebsw(self, model, dataloader, layers, device, base_only=True, unet_model=None, num_projections=128):
-        dataloader.unique_sources = True
         model.to(device)
         model.eval()
 
@@ -261,16 +260,19 @@ class EBSW_Plotter:
         
         for i, (base, aux, _) in enumerate(dataloader):
             if base_only:
-                dataset_1, dataset_2 = torch.split(base, base.size(0) // 2)
+                splits = torch.split(base, base.size(0) // 2)
+                dataset_1, dataset_2 = splits[0], splits[1]
             else:
-                dataset_1, _ = torch.split(base, base.size(0) // 2)
-                dataset_2, _ = torch.split(aux, aux.size(0) // 2)
+                splits_base = torch.split(base, base.size(0) // 2)
+                splits_aux = torch.split(aux, aux.size(0) // 2)
+
+                dataset_1, dataset_2 = splits_base[0], splits_aux[0]
 
             dataset_1 = dataset_1.to(device)
             dataset_2 = dataset_2.to(device)
 
             if unet_model and not base_only:
-                dataset_2 = unet_model(dataset_2)
+                dataset_2 = unet_model(dataset_2)[-1]
                 
             dataset_1_outputs = model(dataset_1)[:layers[-1]+1]
             dataset_2_outputs = model(dataset_2)[:layers[-1]+1]
