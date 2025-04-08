@@ -450,7 +450,7 @@ def main(config_fname):
     logger.info("Training UNET/Classifier for Contrast Model")
     contrast_unet_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}/contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_classifier_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}/contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_examples_final_fname = f"{MODEL_FOLDER}/{CLASSIFIER_ID}/contrast_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    contrast_examples_final_fname = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}/contrast_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
     contrast_model_trainer.cascading_train_loop(
         unet_fname=contrast_unet_final_fname,
