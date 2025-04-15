@@ -192,7 +192,7 @@ class ClassifierTrainer:
                 features = self.classifier(inputs)[-1]
                 features = features.reshape(inputs.shape[0], -1)
                 projected = self.proj_head(features)
-                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
+                loss = criterion(projected, labels.repeat(2), temperature=temperature)
             
             if train:
                 loss.backward()
@@ -1112,7 +1112,7 @@ class Trainer:
                 features = model(inputs)[-1]
                 features = features.reshape(inputs.shape[0], -1)
                 projected = proj_head(features)
-                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
+                loss = criterion(projected, labels.repeat(2), temperature=temperature)
             
             if train:
                 loss.backward()
