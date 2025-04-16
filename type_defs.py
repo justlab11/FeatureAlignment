@@ -76,4 +76,5 @@ class MetaConfig(BaseModel):
     datasets: List[MetaDatasetConfig]
     dataset_pairs: List[MetaDatasetPair]
     image_sizes: List[str]
+    unet_loss: List[str]
     unet_attention: List[bool]

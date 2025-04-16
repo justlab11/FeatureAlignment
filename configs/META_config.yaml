@@ -63,5 +63,9 @@ dataset_pairs:
 image_sizes:
   - "small"
 
+unet_loss:
+  - "mmdfuse"
+  - "ebsw"
+
 unet_attention:
   - False

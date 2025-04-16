@@ -9,7 +9,7 @@ import logging
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
 
 from models import DynamicCNN
-from losses import supervised_contrastive_loss, ISEBSW
+from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
 from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
@@ -301,7 +301,7 @@ class ClassifierTrainer:
         return val_loss, val_acc
 
 class AlignmentTrainer:
-    def __init__(self, classifier, unet, dataloaders: DataLoaderSet):
+    def __init__(self, classifier, unet, dataloaders: DataLoaderSet, unet_loss):
         self.classifier = classifier
         self.unet = unet
 
@@ -309,10 +309,12 @@ class AlignmentTrainer:
         self.test_loader: DataLoader= dataloaders.test_loader
         self.val_loader: DataLoader = dataloaders.val_loader
 
+        self.criterion = ISEBSW if unet_loss == "ebsw" else mmdfuse
+
     def cascade_alignment_train_loop(self, layers, device, alignment_fname, epochs=100):
         torch.save(self.unet.state_dict(), alignment_fname)
         
-        criterion = ISEBSW
+        criterion = self.criterion
         self.unet.to(device)
         self.classifier.to(device)
 
@@ -394,9 +396,10 @@ class AlignmentTrainer:
         return best_val 
 
 class FullTrainer:
-    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder):
+    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss):
         self.classifier = classifier
         self.unet = unet
+        self.unet_loss = unet_loss
         self.classifier_dataloaders = classifier_dataloaders
         self.unet_dataloaders = unet_dataloaders
         self.file_folder = file_folder
@@ -410,7 +413,8 @@ class FullTrainer:
         self.alignment_trainer = AlignmentTrainer(
             classifier=self.classifier,
             unet=self.unet,
-            dataloaders=self.unet_dataloaders
+            dataloaders=self.unet_dataloaders,
+            unet_loss=unet_loss
         )
 
     def cascading_train_loop(self, classifier_fname, unet_fname, examples_fname, device, num_epochs=100):
@@ -458,25 +462,45 @@ class FullTrainer:
                 use_unet=True,
             )
 
-            inter = ebsw_plotter.run_isebsw(
-                model=self.classifier,
-                dataloader=self.unet_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                base_only=True,
-                unet_model=self.unet,
-                num_projections=256
-            )
+            if self.unet_loss == "ebsw":
+                inter = ebsw_plotter.run_isebsw(
+                    model=self.classifier,
+                    dataloader=self.unet_dataloaders.val_loader,
+                    layers=[j for j in range(num_layers-1)],
+                    device=device,
+                    base_only=True,
+                    unet_model=self.unet,
+                    num_projections=256
+                )
 
-            intra = ebsw_plotter.run_isebsw(
-                model=self.classifier,
-                dataloader=self.unet_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                base_only=False,
-                unet_model=self.unet,
-                num_projections=256
-            )
+                intra = ebsw_plotter.run_isebsw(
+                    model=self.classifier,
+                    dataloader=self.unet_dataloaders.val_loader,
+                    layers=[j for j in range(num_layers-1)],
+                    device=device,
+                    base_only=False,
+                    unet_model=self.unet,
+                    num_projections=256
+                )
+
+            else:
+                inter = ebsw_plotter.run_mmdfuse(
+                    model=self.classifier,
+                    dataloader=self.unet_dataloaders.val_loader,
+                    layers=[j for j in range(num_layers-1)],
+                    device=device,
+                    base_only=True,
+                    unet_model=self.unet,
+                )
+
+                intra = ebsw_plotter.run_mmdfuse(
+                    model=self.classifier,
+                    dataloader=self.unet_dataloaders.val_loader,
+                    layers=[j for j in range(num_layers-1)],
+                    device=device,
+                    base_only=False,
+                    unet_model=self.unet,
+                )
 
             inter_layer_distances.append(inter)
             intra_layer_distances.append(intra)

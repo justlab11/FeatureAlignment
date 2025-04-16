@@ -50,11 +50,13 @@ def main(config_fname):
     # data stuff
     BATCH_SIZE: int = CONFIG.dataset.batch_size
     CLASSIFIER_ID: str = CONFIG.classifier.identifier
-    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}"
+    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}"
 
     # data size info
     TARGET_SIZE: int = CONFIG.dataset.target.train_size
     SOURCE_SIZE: int = CONFIG.dataset.source.train_size
+
+    LOSS: str = CONFIG.unet.loss
 
     build_unet: Callable = helpers.make_unet(
         size=CONFIG.dataset.image_size,
@@ -80,7 +82,7 @@ def main(config_fname):
     np.random.seed(CONFIG.dataset.rng_seed)
 
     # start logging
-    log_location: str = os.path.join(log_folder, f"run_{CLASSIFIER_ID}_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.log")
+    log_location: str = os.path.join(log_folder, f"run_{CLASSIFIER_ID}_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}_{LOSS}.log")
     level: int = logging.DEBUG if CONFIG.verbose else logging.INFO
 
     logging.basicConfig(
@@ -296,6 +298,7 @@ def main(config_fname):
     base_model_trainer = trainer.FullTrainer(
         classifier=model,
         unet=unet,
+        unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
         file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID)
@@ -325,6 +328,7 @@ def main(config_fname):
     mixed_model_trainer = trainer.FullTrainer(
         classifier=model,
         unet=unet,
+        unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
         file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID)
@@ -355,6 +359,7 @@ def main(config_fname):
     contrast_model_trainer = trainer.FullTrainer(
         classifier=model,
         unet=unet,
+        unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
         file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID)

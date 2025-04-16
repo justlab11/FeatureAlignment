@@ -216,4 +216,4 @@ def compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device):
         base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True)
         aux_normed = aux_reshaped / torch.norm(aux_reshaped, dim=1, keepdim=True)
 
-    return criterion(base_normed, aux_normed, L=256, device=device)
+    return criterion(base_normed, aux_normed, device=device)

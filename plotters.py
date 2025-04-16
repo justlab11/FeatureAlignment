@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
 
-from losses import ISEBSW
+from losses import ISEBSW, mmdfuse
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
 
 class TSNE_Plotter:
@@ -291,6 +291,53 @@ class EBSW_Plotter:
             total_batches += 1
 
         return total_isebsw_loss
+    
+    def run_mmdfuse(self, model, dataloader, layers, device, base_only=True, unet_model=None):
+        model.to(device)
+        model.eval()
+
+        if unet_model is not None:
+            unet_model.to(device)
+            unet_model.eval()
+
+        if isinstance(layers, int):
+            layers = [i for i in range(layers+1)]
+
+        total_mmdfuse_loss = np.zeros((len(dataloader), len(layers)))
+        total_batches = 0
+        
+        for i, (base, aux, _) in enumerate(dataloader):
+            if base_only:
+                splits = torch.split(base, base.size(0) // 2)
+                dataset_1, dataset_2 = splits[0], splits[1]
+            else:
+                splits_base = torch.split(base, base.size(0) // 2)
+                splits_aux = torch.split(aux, aux.size(0) // 2)
+
+                dataset_1, dataset_2 = splits_base[0], splits_aux[0]
+
+            dataset_1 = dataset_1.to(device)
+            dataset_2 = dataset_2.to(device)
+
+            if unet_model and not base_only:
+                dataset_2 = unet_model(dataset_2)[-1]
+                
+            dataset_1_outputs = model(dataset_1)[:layers[-1]+1]
+            dataset_2_outputs = model(dataset_2)[:layers[-1]+1]
+
+            for j, layer in enumerate(layers):
+                dataset_1_layer_flat = dataset_1_outputs[layer].view(dataset_1_outputs[layer].size(0), -1)
+                dataset_2_layer_flat = dataset_2_outputs[layer].view(dataset_2_outputs[layer].size(0), -1)
+
+                total_mmdfuse_loss[i, j] += mmdfuse(
+                    dataset_1_layer_flat,
+                    dataset_2_layer_flat,
+                    device=device
+                ).item() / self.batch_size
+
+            total_batches += 1
+
+        return total_mmdfuse_loss
 
     def plot_ebsw(self, models: ModelSet, layers: list|int, device: str, filename: str, unet_models: ModelSet|None=None, num_projections: int=128):
         if unet_models == None:

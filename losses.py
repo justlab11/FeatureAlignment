@@ -239,7 +239,7 @@ def one_dimensional_Wasserstein_prod(X,Y,theta,p):
     wasserstein_distance = torch.sum(torch.pow(wasserstein_distance, p), dim=0,keepdim=True)
     return wasserstein_distance
 
-def ISEBSW(X, Y, L=10, p=2, device="cpu"):
+def ISEBSW(X, Y, L=256, p=2, device="cpu"):
     dim = X.size(1)
     theta = rand_projections(dim, L, device)
     wasserstein_distances = one_dimensional_Wasserstein_prod(X,Y,theta,p=p)

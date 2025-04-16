@@ -76,11 +76,12 @@ def main(config_fname):
     combinations = list(itertools.product(
         meta_config.dataset_pairs,
         meta_config.image_sizes,
+        meta_config.unet_loss,
         dataset_sizes
     ))
 
     # now iterate through and build the yaml files
-    for pair, img_size, pct in combinations:
+    for pair, img_size, unet_loss, pct in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
 
@@ -121,6 +122,7 @@ def main(config_fname):
         config.dataset.batch_size = 128 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
+        config.unet.loss = unet_loss
 
         fname = f"configs/{target_dataset.name}+{source_dataset.name}_{int((source_ds_len) * pct)}_{img_size}.yaml"
         with open(fname, "w") as file:
