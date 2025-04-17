@@ -57,6 +57,8 @@ def main(config_fname):
     SOURCE_SIZE: int = CONFIG.dataset.source.train_size
 
     LOSS: str = CONFIG.unet.loss
+    TARGET_NUM_CLASSES: int = CONFIG.dataset.target.num_classes
+    SOURCE_NUM_CLASSES: int = CONFIG.dataset.source.num_classes
 
     build_unet: Callable = helpers.make_unet(
         size=CONFIG.dataset.image_size,
@@ -290,7 +292,7 @@ def main(config_fname):
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
-        num_classes=10,
+        num_classes=TARGET_NUM_CLASSES,
     )
 
     unet = build_unet()
@@ -320,7 +322,7 @@ def main(config_fname):
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
-        num_classes=10,
+        num_classes=TARGET_NUM_CLASSES,
     )
 
     unet = build_unet()
@@ -351,7 +353,7 @@ def main(config_fname):
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
-        num_classes=10
+        num_classes=TARGET_NUM_CLASSES
     )
 
     unet = build_unet()
@@ -405,21 +407,21 @@ def main(config_fname):
         mixed=mixed_acc,
         contrast=contrast_acc
     )
+    if TARGET_NUM_CLASSES != 10 or SOURCE_NUM_CLASSES != 10: 
+        tsne_plotter = plotters.TSNE_Plotter(
+            dataloaders=cls_dl_set,
+            embed_size=model.get_body_output_size(),
+            bs=BATCH_SIZE
+        )
 
-    tsne_plotter = plotters.TSNE_Plotter(
-        dataloaders=cls_dl_set,
-        embed_size=model.get_body_output_size(),
-        bs=BATCH_SIZE
-    )
-
-    tsne_plotter.plot_tsne(
-        models=model_set,
-        accuracies=accuracies,
-        device=DEVICE,
-        filename=tsne_plot_file,
-        base=TARGET,
-        aux=SOURCE
-    )
+        tsne_plotter.plot_tsne(
+            models=model_set,
+            accuracies=accuracies,
+            device=DEVICE,
+            filename=tsne_plot_file,
+            base=TARGET,
+            aux=SOURCE
+        )
 
     logger.info("\nGenerating Energy-Based Wasserstein Distance Plot")
     ebsw_plot_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}/EBSW_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
@@ -516,22 +518,22 @@ def main(config_fname):
         mixed=mixed_model_trainer.unet,
         contrast=contrast_model_trainer.unet
     )
+    if TARGET_NUM_CLASSES != 10 or SOURCE_NUM_CLASSES != 10:
+        tsne_plotter = plotters.TSNE_Plotter(
+            dataloaders=cls_dl_set,
+            embed_size=model.get_body_output_size(),
+            bs=BATCH_SIZE
+        )
 
-    tsne_plotter = plotters.TSNE_Plotter(
-        dataloaders=cls_dl_set,
-        embed_size=model.get_body_output_size(),
-        bs=BATCH_SIZE
-    )
-
-    tsne_plotter.plot_tsne(
-        models=model_set,
-        unet_models=unets,
-        accuracies=accuracies,
-        device=DEVICE,
-        filename=tsne_plot_file,
-        base=TARGET,
-        aux=SOURCE
-    )
+        tsne_plotter.plot_tsne(
+            models=model_set,
+            unet_models=unets,
+            accuracies=accuracies,
+            device=DEVICE,
+            filename=tsne_plot_file,
+            base=TARGET,
+            aux=SOURCE
+        )
 
     logger.info("Generating Energy-Based Wasserstein Distance Plot")
     ebsw_plot_file = f"{IMAGE_FOLDER}/{CLASSIFIER_ID}{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"

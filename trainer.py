@@ -351,6 +351,8 @@ class AlignmentTrainer:
                     for layer in layers
                 )
 
+                # loss += 0.05 * torch.nn.MSELoss()(target_samples, target_reps[-1])
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.unet.parameters(), max_norm)
 
