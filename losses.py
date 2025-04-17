@@ -336,6 +336,12 @@ def mmdfuse(
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
+    # Convert inputs to torch tensors if they aren't already
+    if not isinstance(X, torch.Tensor):
+        X = torch.tensor(X, dtype=torch.float32)
+    if not isinstance(Y, torch.Tensor):
+        Y = torch.tensor(Y, dtype=torch.float32)
+    
     # Set seed for reproducibility
     if seed is not None:
         torch.manual_seed(seed)
@@ -403,29 +409,32 @@ def mmdfuse(
 
     # Setup for permutations
     B = number_permutations
-    # (B+1, m+n): rows of permuted indices
-    idx_base = torch.arange(m + n, device=device).repeat(B + 1, 1)
-    idx = torch.stack([idx_base[i].random_permutation() for i in range(B + 1)])
+    # Create permutation indices
+    idx = []
+    for i in range(B + 1):
+        if i < B:  # For permutations
+            perm = torch.randperm(m + n, device=device)
+            idx.append(perm)
+        else:  # For original ordering (no permutation)
+            idx.append(torch.arange(m + n, device=device))
+    idx = torch.stack(idx)  # Shape: [B+1, m+n]
     
     # 11
     v11 = torch.cat((torch.ones(m, device=device), -torch.ones(n, device=device)))  # (m+n,)
     V11i = v11.repeat(B + 1, 1)  # (B+1, m+n)
     V11 = torch.gather(V11i, 1, idx)  # (B+1, m+n): permute the entries of the rows
-    V11[-1] = v11  # (B+1)th entry is the original MMD (no permutation)
     V11 = V11.t()  # (m+n, B+1)
     
     # 10
     v10 = torch.cat((torch.ones(m, device=device), torch.zeros(n, device=device)))
     V10i = v10.repeat(B + 1, 1)
     V10 = torch.gather(V10i, 1, idx)
-    V10[-1] = v10
     V10 = V10.t()
     
     # 01
     v01 = torch.cat((torch.zeros(m, device=device), -torch.ones(n, device=device)))
     V01i = v01.repeat(B + 1, 1)
     V01 = torch.gather(V01i, 1, idx)
-    V01[-1] = v01
     V01 = V01.t()
 
     # Compute all permuted MMD estimates
@@ -445,14 +454,15 @@ def mmdfuse(
             def compute_bandwidths(distances, number_bandwidths):
                 median = torch.median(distances)
                 distances = distances + (distances == 0) * median
-                dd = torch.sort(distances)[0]
-                lambda_min = dd[(torch.floor(len(dd) * 0.05).long())] / 2
-                lambda_max = dd[(torch.floor(len(dd) * 0.95).long())] * 2
+                dd, _ = torch.sort(distances)
+                lambda_min = dd[int(torch.floor(torch.tensor(len(dd) * 0.05)).item())] / 2
+                lambda_max = dd[int(torch.floor(torch.tensor(len(dd) * 0.95)).item())] * 2
                 bandwidths = torch.linspace(lambda_min, lambda_max, number_bandwidths, device=device)
                 return bandwidths
 
-            triu_indices = torch.triu_indices(pairwise_matrix.shape[0], pairwise_matrix.shape[0], device=device)
-            distances = pairwise_matrix[triu_indices[0], triu_indices[1]]
+            # Get upper triangular indices
+            indices = torch.triu_indices(pairwise_matrix.shape[0], pairwise_matrix.shape[0], 1, device=device)
+            distances = pairwise_matrix[indices[0], indices[1]]
             bandwidths = compute_bandwidths(distances, number_bandwidths)
 
             # Compute all permuted MMD estimates for either l1 or l2
@@ -463,6 +473,7 @@ def mmdfuse(
                     # compute kernel matrix and set diagonal to zero
                     bandwidth = bandwidths[i]
                     K = kernel_matrix(pairwise_matrix, l, kernel, bandwidth)
+                    # Set diagonal to zero
                     K.fill_diagonal_(0)
                     # compute standard deviation
                     unscaled_std = torch.sqrt(torch.sum(K**2))
@@ -607,7 +618,7 @@ def torch_distances(X, Y, l, max_samples=None, matrix=False):
     else:
         # Return only upper triangular part for square matrices
         if n_x == n_y:
-            triu_indices = torch.triu_indices(n_x, n_y, device=X.device)
-            return pairwise_dist[triu_indices[0], triu_indices[1]]
+            indices = torch.triu_indices(n_x, n_y, 1, device=X.device)
+            return pairwise_dist[indices[0], indices[1]]
         else:
             return pairwise_dist.view(-1)  # Flatten the matrix if not square

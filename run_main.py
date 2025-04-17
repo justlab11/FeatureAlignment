@@ -128,6 +128,8 @@ def main(config_fname):
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
 
+        print("Starting run for config:", fname)
+
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(sys.path)
 
