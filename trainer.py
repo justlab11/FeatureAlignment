@@ -7,6 +7,7 @@ import numpy as np
 from os import path
 import logging
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
+import gc
 
 from models import DynamicCNN
 from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
@@ -384,6 +385,9 @@ class AlignmentTrainer:
                     )
 
                 val_loss += loss.item() / len(self.val_loader)
+
+            gc.collect()
+            torch.cuda.empty_cache()
             
             log_message = f"\tAlignment Epoch {epoch+1}: Train- {train_loss}, Val- {val_loss}"
             if val_loss < best_val:
