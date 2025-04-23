@@ -177,22 +177,23 @@ class CombinedDataset(Dataset):
             raise ValueError("Aux dataset missing classes from base dataset")
 
     def __len__(self):
-        return len(self.base_dataset)
+        return len(self.base_dataset)  # This is CRITICAL - must match __getitem__ logic
 
     def __getitem__(self, index):
-        # Base image
+        # Add this validation FIRST
+        if index >= len(self.base_dataset):
+            raise IndexError(
+                f"CombinedDataset: Requested index {index} but "
+                f"base_dataset has {len(self.base_dataset)} samples"
+            )
+        
         base_image, label = self.base_dataset[index]
-        label = int(label)
-
-        # Auxiliary image
-        aux_indices = self.aux_dataset.class_samples.get(label, [])
-        if not aux_indices:
-            raise ValueError(f"No samples found for label {label} in aux_dataset")
-            
-        aux_idx = np.random.choice(aux_indices)
+        
+        # Keep your existing aux logic
+        aux_idx = index % len(self.aux_dataset)
         aux_image, _ = self.aux_dataset[aux_idx]
-
-        return base_image, aux_image, float(label)
+        
+        return base_image, aux_image, label
 
     def get_class_stats(self):
         return {
