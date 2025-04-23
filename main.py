@@ -189,16 +189,18 @@ def main(config_fname):
     logger.info(f"\tTest Dataset Size: {len(test_ds)} (Target: {len(target_test_ds)}, Source: {len(source_test_ds)})")
     logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Source: {len(source_val_ds)})")
 
+    drop_last = True if BATCH_SIZE < 64 else False
+
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=drop_last
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_size=BATCH_SIZE, shuffle=False
+        test_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=drop_last
     )
 
     cls_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False
+        val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=drop_last
     )
 
     cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
@@ -211,21 +213,21 @@ def main(config_fname):
         data_source=train_ds,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        drop_last=False
+        drop_last=drop_last
     )
 
     test_sampler = samplers.PureBatchSampler(
         data_source=test_ds,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        drop_last=False
+        drop_last=drop_last
     )
 
     val_sampler = samplers.PureBatchSampler(
         data_source=train_ds,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        drop_last=False
+        drop_last=drop_last
     )
 
     align_train_loader = torch.utils.data.DataLoader(
