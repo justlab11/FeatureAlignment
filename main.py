@@ -121,6 +121,7 @@ def main(config_fname):
     target_full_dataset: datasets.HEIFFolder = datasets.HEIFFolder(
         target_dir, transform=transform
     )
+    target_full_dataset.validate_dataset()
     target_inds: np.ndarray = np.arange(len(target_full_dataset))
     np.random.shuffle(target_inds)
 
@@ -134,6 +135,7 @@ def main(config_fname):
     source_full_dataset: datasets.HEIFFolder = datasets.HEIFFolder(
         source_dir, transform=transform
     )
+    source_full_dataset.validate_dataset()
     source_inds: np.ndarray = np.arange(len(source_full_dataset))
     np.random.shuffle(source_inds)
 
