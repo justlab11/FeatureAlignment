@@ -189,6 +189,15 @@ def main(config_fname):
     logger.info(f"\tTest Dataset Size: {len(test_ds)} (Target: {len(target_test_ds)}, Source: {len(source_test_ds)})")
     logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Source: {len(source_val_ds)})")
 
+    logger.info(f"\t{sorted(list(train_ds.base_dataset.class_samples.keys()))}")
+    logger.info(f"\t{sorted(list(train_ds.aux_dataset.class_samples.keys()))}")
+
+    logger.info(f"\t{sorted(list(test_ds.base_dataset.class_samples.keys()))}")
+    logger.info(f"\t{sorted(list(test_ds.aux_dataset.class_samples.keys()))}")
+
+    logger.info(f"\t{sorted(list(val_ds.base_dataset.class_samples.keys()))}")
+    logger.info(f"\t{sorted(list(val_ds.aux_dataset.class_samples.keys()))}")
+
     drop_last = True if BATCH_SIZE < 64 else False
 
     cls_train_loader = torch.utils.data.DataLoader(
