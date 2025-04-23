@@ -529,7 +529,7 @@ def main(config_fname):
         mixed=mixed_model_trainer.unet,
         contrast=contrast_model_trainer.unet
     )
-    if TARGET_NUM_CLASSES != 10 or SOURCE_NUM_CLASSES != 10:
+    if TARGET_NUM_CLASSES == 10 and SOURCE_NUM_CLASSES == 10:
         tsne_plotter = plotters.TSNE_Plotter(
             dataloaders=cls_dl_set,
             embed_size=model.get_body_output_size(),
