@@ -78,56 +78,75 @@ class IndexedDataset(Dataset):
     def __init__(self, dataset, indices=None):
         self.dataset = dataset
         self.indices = indices if indices is not None else list(range(len(dataset)))
+        self._validate_indices()
         self.class_samples = self._build_class_samples()
+
+    def _validate_indices(self):
+        max_valid = len(self.dataset) - 1
+        invalid_indices = [i for i in self.indices if i > max_valid]
+        if invalid_indices:
+            raise ValueError(
+                f"Invalid indices found: {invalid_indices[:5]}... "
+                f"(Dataset has {len(self.dataset)} samples)"
+            )
 
     def _build_class_samples(self):
         class_samples = {}
-        for idx, original_idx in enumerate(self.indices):
+        for new_idx, original_idx in enumerate(self.indices):  # new_idx = position in subset
             _, label = self.dataset.samples[original_idx]
             label = int(label)
             if label not in class_samples:
                 class_samples[label] = []
-            class_samples[label].append(idx)
+            class_samples[label].append(new_idx)  # Store subset positions
         return class_samples
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        return self.dataset[self.indices[idx]]
+        original_idx = self.indices[idx]
+        return self.dataset[original_idx]
 
     def get_file_path(self, idx):
-        return self.dataset.samples[self.indices[idx]][0]
+        original_idx = self.indices[idx]
+        return self.dataset.samples[original_idx][0]
+
 
 class CombinedDataset(Dataset):
     def __init__(self, base_dataset: IndexedDataset, aux_dataset: IndexedDataset):
         self.base_dataset = base_dataset
         self.aux_dataset = aux_dataset
+        
+        # Validate dataset alignment
+        base_classes = set(base_dataset.class_samples.keys())
+        aux_classes = set(aux_dataset.class_samples.keys())
+        if not base_classes.issubset(aux_classes):
+            raise ValueError("Aux dataset missing classes from base dataset")
 
     def __len__(self):
         return len(self.base_dataset)
 
     def __getitem__(self, index):
         # Base image
-        base_file_path = self.base_dataset.get_file_path(index)
-        with Image.open(base_file_path) as img:
-            base_image = img.copy()
-        if self.base_dataset.dataset.transform is not None:
-            base_image = self.base_dataset.dataset.transform(base_image)
-        label = int(self.base_dataset.dataset.samples[self.base_dataset.indices[index]][1])
+        base_image, label = self.base_dataset[index]
+        label = int(label)
 
-        # Auxiliary image (random from same class)
+        # Auxiliary image
         aux_indices = self.aux_dataset.class_samples.get(label, [])
         if not aux_indices:
-            raise ValueError(f"No samples found for label {label} in aux_dataset.")
+            raise ValueError(f"No samples found for label {label} in aux_dataset")
+            
         aux_idx = np.random.choice(aux_indices)
-        aux_file_path = self.aux_dataset.get_file_path(aux_idx)
-        with Image.open(aux_file_path) as img:
-            aux_image = img.copy()
-        if self.aux_dataset.dataset.transform is not None:
-            aux_image = self.aux_dataset.dataset.transform(aux_image)
+        aux_image, _ = self.aux_dataset[aux_idx]
 
         return base_image, aux_image, float(label)
+
+    def get_class_stats(self):
+        return {
+            'base_classes': len(self.base_dataset.class_samples),
+            'aux_classes': len(self.aux_dataset.class_samples),
+            'shared_classes': len(set(self.base_dataset.class_samples) & set(self.aux_dataset.class_samples))
+        }
 
 class PairedMNISTDataset(Dataset):
     """

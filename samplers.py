@@ -8,40 +8,34 @@ from datasets import CombinedDataset
 
 class PureBatchSampler(Sampler):
     def __init__(self, data_source, batch_size, shuffle=True, drop_last=True):
-        """
-        Args:
-            data_source: Your CombinedDataset (must have base_dataset.class_samples)
-            batch_size: Samples per pure-class batch
-            shuffle: Shuffle batches/indices if True
-            drop_last: Discard incomplete batches if True
-        """
+        if not hasattr(data_source.base_dataset, 'class_samples'):
+            raise AttributeError("base_dataset must have class_samples attribute")
+            
         self.data_source = data_source
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.drop_last = drop_last
-        
-        # Get class_samples from the base dataset
         self.class_samples = data_source.base_dataset.class_samples
 
     def __iter__(self):
-        # Generate all pure-class batches
         all_batches = []
-        
+        max_index = len(self.data_source) - 1
+
         for class_label, sample_indices in self.class_samples.items():
-            # Shuffle indices within class if requested
             if self.shuffle:
                 random.shuffle(sample_indices)
-            
-            # Split into batches
+
             for i in range(0, len(sample_indices), self.batch_size):
                 batch = sample_indices[i:i + self.batch_size]
                 if not self.drop_last or len(batch) == self.batch_size:
+                    # Final safety check
+                    if any(idx > max_index for idx in batch):
+                        raise IndexError(f"Batch contains invalid indices (max={max_index})")
                     all_batches.append(batch)
-        
-        # Shuffle batch order if requested
+
         if self.shuffle:
             random.shuffle(all_batches)
-        
+
         yield from all_batches
 
     def __len__(self):
