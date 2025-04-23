@@ -124,12 +124,12 @@ def main(config_fname):
     target_inds: np.ndarray = np.arange(len(target_full_dataset))
     np.random.shuffle(target_inds)
 
-    target_train_size: int = CONFIG.dataset.target.train_size
-    target_val_size: int = CONFIG.dataset.target.val_size
+    target_train_end = CONFIG.dataset.target.train_size
+    target_val_end = target_train_end + CONFIG.dataset.target.val_size
 
-    target_train_inds: np.ndarray = target_inds[:target_train_size]
-    target_val_inds: np.ndarray = target_inds[target_train_size:target_train_size+target_val_size]
-    target_test_inds: np.ndarray = target_inds[target_train_size+target_val_size:]
+    target_train_inds: np.ndarray = target_inds[:target_train_end]
+    target_val_inds: np.ndarray = target_inds[target_train_end:target_val_end]
+    target_test_inds: np.ndarray = target_inds[target_val_end:]
 
     source_full_dataset: datasets.HEIFFolder = datasets.HEIFFolder(
         source_dir, transform=transform
@@ -137,12 +137,12 @@ def main(config_fname):
     source_inds: np.ndarray = np.arange(len(source_full_dataset))
     np.random.shuffle(source_inds)
 
-    source_train_size: int = CONFIG.dataset.source.train_size
-    source_val_size: int = CONFIG.dataset.source.val_size
+    source_train_end = CONFIG.dataset.source.train_size
+    source_val_end = source_train_end + CONFIG.dataset.source.val_size
 
-    source_train_inds: np.ndarray = source_inds[:source_train_size]
-    source_val_inds: np.ndarray = source_inds[source_train_size:source_train_size+source_val_size]
-    source_test_inds: np.ndarray = source_inds[source_train_size+source_val_size:]
+    source_train_inds: np.ndarray = source_inds[:source_train_end]
+    source_val_inds: np.ndarray = source_inds[source_train_end:source_val_end]
+    source_test_inds: np.ndarray = source_inds[source_val_end:]
 
     target_train_ds: datasets.IndexedDataset = datasets.IndexedDataset(
         dataset=target_full_dataset,

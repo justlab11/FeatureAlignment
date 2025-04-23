@@ -109,16 +109,48 @@ def main(config_fname):
         config.dataset.target.folder = target_dataset.folder
         config.dataset.source.folder = source_dataset.folder
 
+        # For TARGET dataset
         if "mnist" in target_dataset.name.lower():
             config.dataset.target.train_size = 1000
+            config.dataset.target.val_size = 3000  # Your original val size
         elif "cifar10" in target_dataset.name.lower():
             config.dataset.target.train_size = 4000
+            config.dataset.target.val_size = int(target_ds_len * 0.1)  # Or your preferred val size
         else:
-            config.dataset.target.train_size = int(target_ds_len * .85)
-        config.dataset.source.train_size = int((source_ds_len) * pct)
+            # Set minimum test samples you want (e.g., 20)
+            MIN_TEST = 20
+            
+            # Calculate max allowed train + val
+            max_train_val = target_ds_len - MIN_TEST
+            
+            # Calculate ideal splits
+            train_size = int(target_ds_len * 0.85)
+            val_size = int(target_ds_len * 0.1)
+            
+            # Adjust if needed
+            if train_size + val_size > max_train_val:
+                # Scale down proportionally
+                scale = max_train_val / (train_size + val_size)
+                train_size = int(train_size * scale)
+                val_size = max_train_val - train_size
+            
+            config.dataset.target.train_size = train_size
+            config.dataset.target.val_size = val_size
 
-        config.dataset.target.val_size = int(target_ds_len * .1)
-        config.dataset.source.val_size = int((source_ds_len) * .05)
+        # For SOURCE dataset
+        MIN_TEST_SOURCE = 5  # Set your desired minimum
+        max_train_val_source = source_ds_len - MIN_TEST_SOURCE
+
+        source_train_size = int(source_ds_len * pct)
+        source_val_size = int(source_ds_len * 0.05)
+
+        if source_train_size + source_val_size > max_train_val_source:
+            scale = max_train_val_source / (source_train_size + source_val_size)
+            source_train_size = int(source_train_size * scale)
+            source_val_size = max_train_val_source - source_train_size
+
+        config.dataset.source.train_size = source_train_size
+        config.dataset.source.val_size = source_val_size
 
         config.dataset.target.num_classes = target_dataset.num_classes
         config.dataset.source.num_classes = source_dataset.num_classes
