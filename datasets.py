@@ -177,22 +177,19 @@ class CombinedDataset(Dataset):
             raise ValueError("Aux dataset missing classes from base dataset")
 
     def __len__(self):
-        return len(self.base_dataset)  # This is CRITICAL - must match __getitem__ logic
+        # THIS MUST MATCH THE BASE DATASET SIZE
+        return len(self.base_dataset)  # NOT len(base) + len(aux)
 
     def __getitem__(self, index):
-        # Add this validation FIRST
+        # Add this check (redundant if __len__ is correct, but critical for debugging)
         if index >= len(self.base_dataset):
             raise IndexError(
-                f"CombinedDataset: Requested index {index} but "
-                f"base_dataset has {len(self.base_dataset)} samples"
+                f"Index {index} exceeds base dataset size {len(self.base_dataset)}. "
+                f"Check CombinedDataset.__len__() and DataLoader configuration."
             )
         
         base_image, label = self.base_dataset[index]
-        
-        # Keep your existing aux logic
-        aux_idx = index % len(self.aux_dataset)
-        aux_image, _ = self.aux_dataset[aux_idx]
-        
+        aux_image, _ = self.aux_dataset[index % len(self.aux_dataset)]  # Cycle aux
         return base_image, aux_image, label
 
     def get_class_stats(self):
