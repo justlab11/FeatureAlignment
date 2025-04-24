@@ -82,12 +82,11 @@ class IndexedDataset(Dataset):
 
     def _build_class_samples(self):
         class_samples = {}
-        for idx, original_idx in enumerate(self.indices):
-            _, label = self.dataset.samples[original_idx]
-            label = int(label)
+        for idx, original_idx in enumerate(self.indices):  # idx is new position
+            _, label = self.dataset.samples[original_idx]  # original_idx from full dataset
             if label not in class_samples:
                 class_samples[label] = []
-            class_samples[label].append(idx)
+            class_samples[label].append(idx)  # Store NEW index position
         return class_samples
 
     def __len__(self):

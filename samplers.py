@@ -8,17 +8,14 @@ from datasets import CombinedDataset
 
 class PureBatchSampler(Sampler):
     def __init__(self, data_source, batch_size, shuffle=True, drop_last=True):
+        if not hasattr(data_source.base_dataset, 'class_samples'):
+            raise AttributeError("base_dataset must have class_samples attribute")
+            
         self.data_source = data_source
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.drop_last = drop_last
-
-        # Remap original indices to positions in IndexedDataset.indices
-        original_to_remapped = {orig_idx: remap_idx for remap_idx, orig_idx in enumerate(data_source.base_dataset.indices)}
-        self.class_samples = {}
-        for class_label, orig_indices in data_source.base_dataset.class_samples.items():
-            remapped_indices = [original_to_remapped[idx] for idx in orig_indices if idx in original_to_remapped]
-            self.class_samples[class_label] = remapped_indices
+        self.class_samples = data_source.base_dataset.class_samples
 
     def __iter__(self):
         all_batches = []
@@ -31,6 +28,7 @@ class PureBatchSampler(Sampler):
             for i in range(0, len(sample_indices), self.batch_size):
                 batch = sample_indices[i:i + self.batch_size]
                 if not self.drop_last or len(batch) == self.batch_size:
+                    # Final safety check
                     if any(idx > max_index for idx in batch):
                         raise IndexError(f"Batch contains invalid indices (max={max_index})")
                     all_batches.append(batch)
