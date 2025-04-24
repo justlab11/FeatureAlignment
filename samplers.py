@@ -8,9 +8,6 @@ from datasets import CombinedDataset
 
 class PureBatchSampler(Sampler):
     def __init__(self, data_source, batch_size, shuffle=True, drop_last=True):
-        if not hasattr(data_source.base_dataset, 'class_samples'):
-            raise AttributeError("base_dataset must have class_samples attribute")
-            
         self.data_source = data_source
         self.batch_size = batch_size
         self.shuffle = shuffle
