@@ -109,38 +109,22 @@ def main(config_fname):
         config.dataset.target.folder = target_dataset.folder
         config.dataset.source.folder = source_dataset.folder
 
-        # For TARGET dataset
         if "mnist" in target_dataset.name.lower():
             config.dataset.target.train_size = 1000
-            config.dataset.target.val_size = 3000  # Original value
         elif "cifar10" in target_dataset.name.lower():
             config.dataset.target.train_size = 4000
-            config.dataset.target.val_size = int(target_ds_len * 0.1)
         else:
-            # Set ratios
-            TRAIN_RATIO = 0.85
-            VAL_RATIO = 0.10
-            # Calculate raw sizes
-            train_size = int(target_ds_len * TRAIN_RATIO)
-            val_size = int(target_ds_len * VAL_RATIO)
-            
-            # Ensure test has at least 1 sample
-            if train_size + val_size >= target_ds_len:
-                train_size = int(target_ds_len * 0.8)  # Reduce ratios
-                val_size = int(target_ds_len * 0.1)
-            
-            # Final validation
-            assert train_size + val_size < target_ds_len, \
-                f"Invalid splits: train={train_size}, val={val_size}, total={target_ds_len}"
-            
-            config.dataset.target.train_size = train_size
-            config.dataset.target.val_size = val_size
+            config.dataset.target.train_size = int(target_ds_len * .85)
+        config.dataset.source.train_size = int((source_ds_len) * pct)
+
+        config.dataset.target.val_size = int(target_ds_len * .1)
+        config.dataset.source.val_size = int((source_ds_len) * (1-pct)/2)
 
         config.dataset.target.num_classes = target_dataset.num_classes
         config.dataset.source.num_classes = source_dataset.num_classes
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 32 if img_size == "small" else 16
+        config.dataset.batch_size = 128 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
         config.unet.loss = unet_loss

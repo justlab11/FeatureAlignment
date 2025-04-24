@@ -40,17 +40,17 @@ datasets:
     num_classes: 31
 
 dataset_pairs:
-  - target: "MNIST"
-    source: "Gap_MNIST"
+  # - target: "MNIST"
+  #   source: "Gap_MNIST"
 
-  - target: "MNIST"
-    source: "Texture_MNIST"
+  # - target: "MNIST"
+  #   source: "Texture_MNIST"
 
-  - target: "MNIST"
-    source: "SVHN"
+  # - target: "MNIST"
+  #   source: "SVHN"
 
-  - target: "Cifar10"
-    source: "Cut_Cifar10"
+  # - target: "Cifar10"
+  #   source: "Cut_Cifar10"
 
   - target: "Amazon"
     source: "DSLR"
@@ -74,8 +74,8 @@ image_sizes:
   - "small"
 
 unet_loss:
-  - "mmdfuse"
   - "ebsw"
+  - "mmdfuse"
 
 unet_attention:
   - False
