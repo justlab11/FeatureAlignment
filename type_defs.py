@@ -9,6 +9,7 @@ class DatasetConfig(BaseModel):
     folder: str
     train_size: int
     val_size: int
+    num_classes: int
 
 class DatasetRootConfig(BaseModel):
     target: DatasetConfig
@@ -67,6 +68,7 @@ class ModelSet(BaseModel):
 class MetaDatasetConfig(BaseModel):
     name: str
     folder: str
+    num_classes: int
 
 class MetaDatasetPair(BaseModel):
     target: str
@@ -76,4 +78,5 @@ class MetaConfig(BaseModel):
     datasets: List[MetaDatasetConfig]
     dataset_pairs: List[MetaDatasetPair]
     image_sizes: List[str]
+    unet_loss: List[str]
     unet_attention: List[bool]

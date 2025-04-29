@@ -22,16 +22,18 @@ TEMPLATE_YAML = {
             "folder": "data/mnist_v2",
             "train_size": 1000,
             "val_size": 3000,
+            "num_classes": 10
         },
         "source": {
             "name": "SVHN",
             "folder": "data/house_mnist_32",
             "train_size": 69000,
             "val_size": 500,
+            "num_classes": 10
         },
         "image_size": "small",
         "rng_seed": 72,
-        "batch_size": 64,
+        "batch_size": 128,
     },
     "save_locations": {
         "model_folder": "models",
@@ -76,11 +78,12 @@ def main(config_fname):
     combinations = list(itertools.product(
         meta_config.dataset_pairs,
         meta_config.image_sizes,
+        meta_config.unet_loss,
         dataset_sizes
     ))
 
     # now iterate through and build the yaml files
-    for pair, img_size, pct in combinations:
+    for pair, img_size, unet_loss, pct in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
 
@@ -115,16 +118,22 @@ def main(config_fname):
         config.dataset.source.train_size = int((source_ds_len) * pct)
 
         config.dataset.target.val_size = int(target_ds_len * .1)
-        config.dataset.source.val_size = int((source_ds_len) * .05)
+        config.dataset.source.val_size = int((source_ds_len) * (1-pct)/2)
+
+        config.dataset.target.num_classes = target_dataset.num_classes
+        config.dataset.source.num_classes = source_dataset.num_classes
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 64 if img_size == "small" else 16
+        config.dataset.batch_size = 32 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
+        config.unet.loss = unet_loss
 
         fname = f"configs/{target_dataset.name}+{source_dataset.name}_{int((source_ds_len) * pct)}_{img_size}.yaml"
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
+
+        print("Starting run for config:", fname)
 
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(sys.path)

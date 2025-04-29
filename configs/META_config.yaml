@@ -1,46 +1,56 @@
 datasets:
   - name: "MNIST"
     folder: "data/mnist_32"
+    num_classes: 10
 
   - name: "Gap_MNIST"
     folder: "data/mnist_skip_32"
+    num_classes: 10
 
   - name: "Texture_MNIST"
     folder: "data/texture_mnist_32"
+    num_classes: 10
 
   - name: "SVHN"
     folder: "data/house_mnist_32"
+    num_classes: 10
 
   - name: "Cifar10"
     folder: "data/cifar10_32"
+    num_classes: 10
 
   - name: "Smear_Cifar10"
     folder: "data/cifar10_smear_32"
+    num_classes: 10
 
   - name: "Cut_Cifar10"
     folder: "data/cifar10_cut_32"
+    num_classes: 10
 
   - name: "Amazon"
     folder: "data/amazon"
+    num_classes: 31
   
   - name: "DSLR"
     folder: "data/dslr"
+    num_classes: 31
   
   - name: "Webcam"
     folder: "data/webcam"
+    num_classes: 31
 
 dataset_pairs:
-  #- target: "MNIST"
-  #- source: "Gap_MNIST"
+  # - target: "MNIST"
+  #   source: "Gap_MNIST"
 
-  #- target: "MNIST"
-  #  source: "Texture_MNIST"
+  # - target: "MNIST"
+  #   source: "Texture_MNIST"
 
-  #- target: "MNIST"
-  #  source: "SVHN"
+  # - target: "MNIST"
+  #   source: "SVHN"
 
-  #- target: "Cifar10"
-  #- source: "Cut_Cifar10"
+  # - target: "Cifar10"
+  #   source: "Cut_Cifar10"
 
   - target: "Amazon"
     source: "DSLR"
@@ -62,6 +72,10 @@ dataset_pairs:
 
 image_sizes:
   - "small"
+
+unet_loss:
+  - "ebsw"
+  - "mmdfuse"
 
 unet_attention:
   - False

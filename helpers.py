@@ -1,7 +1,7 @@
 import torch
 from torchvision import transforms
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import yaml
@@ -203,3 +203,17 @@ def make_unet(size:str, attention:bool=False, base_channels:int=32, noise_channe
         return model
     
     return unet
+
+def compute_layer_loss(base_reps, aux_reps, labels, layer, criterion, device):
+    base_reshaped = base_reps[layer].view(base_reps[layer].size(0), -1)
+    aux_reshaped = aux_reps[layer].view(aux_reps[layer].size(0), -1)
+
+    if layer == len(base_reps) - 1:  # Output layer
+        base_normed = F.one_hot(labels, base_reshaped.size(1))
+        base_normed = base_normed.float()
+        aux_normed = F.softmax(aux_reshaped, dim=1)
+    else:  # Intermediate layers
+        base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True)
+        aux_normed = aux_reshaped / torch.norm(aux_reshaped, dim=1, keepdim=True)
+
+    return criterion(base_normed, aux_normed, device=device)
