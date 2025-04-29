@@ -238,6 +238,8 @@ class TSNE_Plotter:
         plt.tight_layout()
         plt.savefig(filename, format="pdf", dpi=300)
 
+        plt.close()
+
 
 class EBSW_Plotter:
     def __init__(self, dataloaders: DataLoaderSet, batch_size: int):
@@ -460,6 +462,8 @@ class EBSW_Plotter:
             plt.tight_layout()
             plt.savefig(filename, format="pdf", dpi=300)
 
+            plt.close()
+
 def plot_examples(dataset, unet_model, filename, device):
     unet_model.eval()
     # Randomly select 10 samples
@@ -494,3 +498,4 @@ def plot_examples(dataset, unet_model, filename, device):
 
     plt.tight_layout()
     plt.savefig(filename, format="pdf", dpi=300)
+    plt.close()

@@ -486,7 +486,7 @@ class DynamicResNet(nn.Module):
                 nn.init.zeros_(self.model.fc.bias)
 
     def forward(self, x):
-        layer_outputs = []
+        layer_outputs = [x]
 
         def hook_fn(module, input, output):
             if self.freeze_body:
