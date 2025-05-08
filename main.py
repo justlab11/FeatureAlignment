@@ -289,34 +289,34 @@ def main(config_fname):
     baseline_unet_filename = f"{MODEL_FOLDER}/baseline_unet_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     baseline_classifier_filename = f"{MODEL_FOLDER}/baseline_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    # baseline_autoencoder = models.CustomAutoencoder()
-    # baseline_unet = build_unet()
-    # baseline_classifier = models.DynamicResNet(
-    #     resnet_type=CONFIG.classifier.model,
-    #     num_classes=10,
-    # )
+    baseline_autoencoder = models.CustomAutoencoder()
+    baseline_unet = build_unet()
+    baseline_classifier = models.DynamicResNet(
+        resnet_type=CONFIG.classifier.model,
+        num_classes=10,
+    )
 
-    # baseline_model_trainer = trainer.PreloaderTrainer(
-    #     autoencoder=baseline_autoencoder,
-    #     unet = baseline_unet,
-    #     classifier = baseline_classifier,
-    #     dataloaders=cls_dl_set
-    # )
+    baseline_model_trainer = trainer.PreloaderTrainer(
+        autoencoder=baseline_autoencoder,
+        unet = baseline_unet,
+        classifier = baseline_classifier,
+        dataloaders=cls_dl_set
+    )
 
-    #baseline_model_trainer.unet_preloader_train_loop(
-    #    ae_filename=baseline_ae_filename,
-    #    unet_filename=baseline_unet_filename,
-    #    device=DEVICE,
-    #    train_both=True
-    #)
+    baseline_model_trainer.unet_preloader_train_loop(
+       ae_filename=baseline_ae_filename,
+       unet_filename=baseline_unet_filename,
+       device=DEVICE,
+       train_both=True
+    )
 
-    #baseline_model_trainer.classification_train_loop(
-    #    classifier_filename=baseline_classifier_filename,
-    #    device=DEVICE,
-    #    num_epochs=100
-    #)
+    baseline_model_trainer.classification_train_loop(
+       classifier_filename=baseline_classifier_filename,
+       device=DEVICE,
+       num_epochs=100
+    )
 
-    #baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
+    baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
@@ -348,11 +348,6 @@ def main(config_fname):
     else:
         base_model_trainer.classifier.load_state_dict(torch.load(base_model_file))
 
-    # Unload base model after training/evaluation
-    unload_model(base_model_trainer.classifier, DEVICE)
-    unload_model(base_model_trainer.unet, DEVICE)
-    del base_model_trainer
-
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
@@ -383,11 +378,6 @@ def main(config_fname):
     else:
         mixed_model_trainer.classifier.load_state_dict(torch.load(mixed_model_file))
 
-    # Unload mixed model after training/evaluation
-    unload_model(mixed_model_trainer.classifier, DEVICE)
-    unload_model(mixed_model_trainer.unet, DEVICE)
-    del mixed_model_trainer
-
     logger.info("\nTraining Contrastive Model")
     contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
@@ -417,11 +407,6 @@ def main(config_fname):
         )
     else:
         contrast_model_trainer.classifier.load_state_dict(torch.load(contrast_full_model_file))
-
-    # Unload contrast model after training/evaluation
-    unload_model(contrast_model_trainer.classifier, DEVICE)
-    unload_model(contrast_model_trainer.unet, DEVICE)
-    del contrast_model_trainer
 
     logger.info("\nGetting Model Accuracy")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"

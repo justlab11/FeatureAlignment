@@ -355,6 +355,13 @@ class AlignmentTrainer:
                 # loss += 0.05 * torch.nn.MSELoss()(target_samples, target_reps[-1])
 
                 loss.backward()
+                for name, param in self.unet.named_parameters():
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any():
+                            print(f"NaN detected in gradient of {name}")
+                        if torch.isinf(param.grad).any():
+                            print(f"Inf detected in gradient of {name}")
+
                 torch.nn.utils.clip_grad_norm_(self.unet.parameters(), max_norm)
 
                 unet_optimizer.step()
@@ -1255,7 +1262,7 @@ class PreloaderTrainer:
             self.autoencoder.to(device)
 
             for epoch in range(num_epochs):
-                self.unet.train()
+                self.autoencoder.train()
                 for base, aux, _ in self.train_loader:
                     ae_optimizer.zero_grad()
                     base = base.to(device)
@@ -1268,9 +1275,10 @@ class PreloaderTrainer:
                     loss = nn.MSELoss()(output, combined_input)
 
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), 3)
                     ae_optimizer.step()
 
-                self.unet.eval()
+                self.autoencoder.eval()
                 total_loss = 0
                 with torch.no_grad():
                     for base, aux, _ in self.val_loader:
@@ -1319,6 +1327,7 @@ class PreloaderTrainer:
                     device=device,
                     train=True
                 )
+                torch.nn.utils.clip_grad_norm_(self.autoencoder.unet(), 3)
 
                 epoch_loss = self._unet_run(
                     autoencoder=self.autoencoder,
@@ -1474,11 +1483,6 @@ class PreloaderTrainer:
         running_loss = 0.0
         correct = 0
         total = 0
-
-        if mode == "base_only":
-            dataloader.dataset.dataset.unique_sources = True 
-        else:
-            dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
