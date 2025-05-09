@@ -327,7 +327,7 @@ class AlignmentTrainer:
         unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=epochs, eta_min=1e-6)
 
         best_val = float('inf')
-        max_norm = 3
+        max_norm = 1
 
         for epoch in range(epochs):
             self.unet.train()
@@ -1275,7 +1275,7 @@ class PreloaderTrainer:
                     loss = nn.MSELoss()(output, combined_input)
 
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), 3)
+                    torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), 1)
                     ae_optimizer.step()
 
                 self.autoencoder.eval()
@@ -1312,31 +1312,24 @@ class PreloaderTrainer:
         self.autoencoder.eval()
         for epoch in range(num_epochs):
             self.autoencoder.train()
-            for base, aux, labels in self.train_loader:
-                labels = labels.long()
+            self._unet_run(
+                autoencoder=self.autoencoder,
+                unet_model=self.unet,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
+            torch.nn.utils.clip_grad_norm_(self.unet.parameters(), 1)
 
-                base = base.to(device)
-                aux = aux.to(device)
-                labels = labels.to(device)
-
-                self._unet_run(
-                    autoencoder=self.autoencoder,
-                    unet_model=self.unet,
-                    optimizer=unet_optimizer,
-                    dataloader=self.train_loader,
-                    device=device,
-                    train=True
-                )
-                torch.nn.utils.clip_grad_norm_(self.autoencoder.unet(), 3)
-
-                epoch_loss = self._unet_run(
-                    autoencoder=self.autoencoder,
-                    unet_model=self.unet,
-                    optimizer=None,
-                    dataloader=self.val_loader,
-                    device=device,
-                    train=False
-                )
+            epoch_loss = self._unet_run(
+                autoencoder=self.autoencoder,
+                unet_model=self.unet,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                train=False
+            )
 
             log_message = f"\tUNET Epoch {epoch+1}: {epoch_loss:.4f}"
 

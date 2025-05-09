@@ -76,6 +76,8 @@ def main(config_fname):
         SUB_FOLDER,
         CONFIG.save_locations.logs_folder,
     )
+
+    print(f"Run location: {os.path.join(CLASSIFIER_ID, SUB_FOLDER)}")
     for folder in [MODEL_FOLDER, FILE_FOLDER, IMAGE_FOLDER]:
         os.makedirs(folder, exist_ok=True)
 
@@ -117,7 +119,7 @@ def main(config_fname):
         ])
     elif CONFIG.dataset.image_size == "large":
         transform = transforms.Compose([
-            transforms.Resize(224),  # Ensure consistency if needed
+            transforms.Resize(128),  # Ensure consistency if needed
             tr.EnsureThreeChannelsPIL(),  # Convert to 3 channels
             transforms.ToTensor(),
         ])
@@ -221,7 +223,7 @@ def main(config_fname):
     drop_last = False
 
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=drop_last
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=drop_last, pin_memory=True
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
@@ -260,7 +262,7 @@ def main(config_fname):
     )
 
     align_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=2
+        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True
     )
 
     align_test_loader = torch.utils.data.DataLoader(
@@ -293,7 +295,7 @@ def main(config_fname):
     baseline_unet = build_unet()
     baseline_classifier = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
-        num_classes=10,
+        num_classes=TARGET_NUM_CLASSES,
     )
 
     baseline_model_trainer = trainer.PreloaderTrainer(
@@ -304,10 +306,10 @@ def main(config_fname):
     )
 
     baseline_model_trainer.unet_preloader_train_loop(
-       ae_filename=baseline_ae_filename,
-       unet_filename=baseline_unet_filename,
-       device=DEVICE,
-       train_both=True
+        ae_filename=baseline_ae_filename,
+        unet_filename=baseline_unet_filename,
+        device=DEVICE,
+        train_both=True
     )
 
     baseline_model_trainer.classification_train_loop(
@@ -317,6 +319,7 @@ def main(config_fname):
     )
 
     baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
+    logger.info(baseline_val_acc)
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"

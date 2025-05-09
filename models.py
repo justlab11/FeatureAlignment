@@ -766,7 +766,7 @@ class LargeCustomUNET(nn.Module):
         self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
         # Latent space normalization
-        self.latent_norm = nn.LayerNorm([base_channels * 16, 7, 7])  # Adjusted for latent space size (7x7 for 224x224 input)
+        self.latent_norm = nn.LayerNorm([base_channels * 16, 8, 8])  # Adjusted for latent space size (7x7 for 224x224 input)
 
         # Noise addition
         self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
@@ -802,7 +802,7 @@ class LargeCustomUNET(nn.Module):
         )
 
     def forward(self, x):
-        layer_outputs = []
+        layer_outputs = [x]
 
         # Encoder
         e1 = self.enc1(x)  
@@ -817,26 +817,18 @@ class LargeCustomUNET(nn.Module):
         e4 = self.enc4(self.pool(e3))  
         layer_outputs.append(e4)
 
-        e5 = self.enc5(self.pool(e4))  
-        
-        # Latent space normalization and noise addition
-        batch_size, channels, height, width = e5.shape
+        e5 = self.enc5(self.pool(e4))
+        layer_outputs.append(e5)  
 
-        e5_normalized = e5.view(batch_size, channels, -1)  # Flatten spatial dimensions
-        e5_normalized = nn.LayerNorm(e5_normalized.size()[1:])(e5_normalized)  
-        e5_normalized = e5_normalized.view(batch_size, channels, height, width)  # Reshape back
+        e5_normalized = self.latent_norm(e5)
 
-        noise = torch.randn(batch_size, self.noise_channels, height, width, device=e5.device)  
-        
-        # Transform noise to match latent space dimensions
-        noise_transformed = self.noise_conv(noise)
+        noise = torch.randn(e5.size(0), self.noise_channels, e5.size(2), e5.size(3), device=e5.device)
+        noise_transformed = self.noise_conv(noise).view_as(e5)
 
         norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
-
+        
         e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
-        e5_blended = e5_blended.view_as(e5)  # Ensure shape consistency if needed
-
-        layer_outputs.append(e5_blended)
+        e5_blended = self.latent_norm(e5_blended)
 
         # Decoder
         d4 = self.dec4(torch.cat([self.upsample(e5_blended), e4], dim=1))
