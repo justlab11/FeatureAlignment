@@ -1014,11 +1014,6 @@ class Trainer:
         running_loss = 0.0
         correct = 0
         total = 0
-
-        # if mode == "base_only":
-        #     dataloader.dataset.dataset.unique_sources = True 
-        # else:
-        #     dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
@@ -1395,7 +1390,7 @@ class PreloaderTrainer:
     def evaluate_model(self, device):
         _, val_acc = self._classification_run(
             model=self.classifier,
-            unet_model=self.unet,
+            unet_model=None,
             optimizer=None,
             dataloader=self.val_loader,
             device=device,
@@ -1496,11 +1491,6 @@ class PreloaderTrainer:
                 else:
                     if unet_model != None:
                         aux_samples = unet_model(aux_samples)[-1]
-
-                    # logger.info(base_samples.shape)
-                    # logger.info(aux_samples.shape)
-                    # print(base_samples.shape)
-                    # print(aux_samples.shape)
 
                     inputs = torch.cat((base_samples, aux_samples), 0)
 
