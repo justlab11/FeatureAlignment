@@ -337,7 +337,8 @@ def main(config_fname):
         unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
-        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID)
+        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID),
+        classifier_name="base"
     )
 
     if not os.path.exists(base_model_file):
@@ -367,7 +368,8 @@ def main(config_fname):
         unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
-        file_folder = FILE_FOLDER
+        file_folder = FILE_FOLDER,
+        classifier_name="mixed"
     )
 
     if not os.path.exists(mixed_model_file):
@@ -398,7 +400,8 @@ def main(config_fname):
         unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
-        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID)
+        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID),
+        classifier_name="contrast"
     )
 
     if not os.path.exists(contrast_full_model_file):

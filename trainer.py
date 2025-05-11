@@ -14,7 +14,7 @@ from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
 from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
-from plotters import plot_examples, EBSW_Plotter
+from plotters import plot_examples, EBSW_Plotter, divergence_plots
 
 logger = logging.getLogger(__name__)
 
@@ -409,18 +409,19 @@ class AlignmentTrainer:
         return best_val 
 
 class FullTrainer:
-    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss):
+    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss, classifier_name):
         self.classifier = classifier
         self.unet = unet
         self.unet_loss = unet_loss
         self.classifier_dataloaders = classifier_dataloaders
         self.unet_dataloaders = unet_dataloaders
         self.file_folder = file_folder
+        self.classifier_name = classifier_name
 
         self.classifier_trainer = ClassifierTrainer(
             classifier=self.classifier,
             unet=self.unet,
-            dataloaders=self.classifier_dataloaders
+            dataloaders=self.classifier_dataloaders,
         )  
 
         self.alignment_trainer = AlignmentTrainer(
@@ -440,6 +441,7 @@ class FullTrainer:
 
         inter_layer_distances = []
         intra_layer_distances = []
+        classifier_val_accs = []
 
         ebsw_plotter = EBSW_Plotter(
             dataloaders=self.unet_dataloaders,
@@ -520,8 +522,8 @@ class FullTrainer:
 
             classifier_val, classifier_acc = self.classifier_trainer.evaluate_model(
                 device=device,
-                use_unet=True
             )
+            classifier_val_accs.append(classifier_acc)
 
             if classifier_val < best_layer_val:
                 best_layer_val = classifier_val
@@ -537,13 +539,23 @@ class FullTrainer:
 
         inter_layer_distances = np.array(inter_layer_distances)
         intra_layer_distances = np.array(intra_layer_distances)
+        classifier_val_accs = np.array(classifier_val_accs)
 
-        np.save(
-            path.join(self.file_folder, "inter_layer_distances.npy"), inter_layer_distances
-        )
+        model_name = self.classifier_name
+        inter_fname = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
+        intra_fname = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
+        val_fname = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
+        div_plots_fname = path.join(self.file_folder, f"{model_name}-divergence_plots")
 
-        np.save(
-            path.join(self.file_folder, "intra_layer_distances.npy"), intra_layer_distances
+        np.save(inter_fname, inter_layer_distances)
+        np.save(intra_fname, intra_layer_distances)
+        np.save(val_fname, classifier_val_accs)
+
+        divergence_plots(
+            inter_data=inter_layer_distances,
+            intra_data=intra_layer_distances,
+            val_acc_values=classifier_val_accs,
+            fname=div_plots_fname
         )
 
 class Trainer:
