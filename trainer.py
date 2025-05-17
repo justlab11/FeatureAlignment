@@ -14,7 +14,7 @@ from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
 from datasets import CombinedDataset, HEIFFolder, IndexedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
-from plotters import plot_examples, EBSW_Plotter
+from plotters import plot_examples, EBSW_Plotter, divergence_plots
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +251,16 @@ class ClassifierTrainer:
                 use_unet=use_unet
             )
 
-            log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}"
+            test_loss, test_acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_unet=use_unet
+            )
+
+            log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
 
             if val_loss < best_val_loss:
                 log_message += " <- New Best"
@@ -290,16 +299,26 @@ class ClassifierTrainer:
         return best_temp
 
 
-    def evaluate_model(self, device, use_unet=False):
-        val_loss, val_acc = self._classification_run(
-            optimizer=None,
-            dataloader=self.val_loader,
-            device=device,
-            target_only=True,
-            train=False,
-            use_unet=use_unet
-        )
-        return val_loss, val_acc
+    def evaluate_model(self, device, use_unet=False, test=False):
+        if test:
+            loss, acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_unet=use_unet
+            )                
+        else:
+            loss, acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_unet=use_unet
+            )
+        return loss, acc
 
 class AlignmentTrainer:
     def __init__(self, classifier, unet, dataloaders: DataLoaderSet, unet_loss):
@@ -327,7 +346,8 @@ class AlignmentTrainer:
         unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=epochs, eta_min=1e-6)
 
         best_val = float('inf')
-        max_norm = 3
+        max_norm = 1
+        unet_nan = False
 
         for epoch in range(epochs):
             self.unet.train()
@@ -355,6 +375,17 @@ class AlignmentTrainer:
                 # loss += 0.05 * torch.nn.MSELoss()(target_samples, target_reps[-1])
 
                 loss.backward()
+                for name, param in self.unet.named_parameters():
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any():
+                            print(f"NaN detected in gradient of {name}")
+                            unet_nan = True
+                            break
+                        if torch.isinf(param.grad).any():
+                            print(f"Inf detected in gradient of {name}")
+                            unet_nan = True
+                            break
+
                 torch.nn.utils.clip_grad_norm_(self.unet.parameters(), max_norm)
 
                 unet_optimizer.step()
@@ -362,6 +393,9 @@ class AlignmentTrainer:
                 train_loss += loss.item() / len(self.train_loader)
 
             unet_scheduler.step()
+            if unet_nan:
+                unet_nan = False
+                break
 
             self.unet.eval()
             val_loss = 0
@@ -402,18 +436,19 @@ class AlignmentTrainer:
         return best_val 
 
 class FullTrainer:
-    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss):
+    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss, classifier_name):
         self.classifier = classifier
         self.unet = unet
         self.unet_loss = unet_loss
         self.classifier_dataloaders = classifier_dataloaders
         self.unet_dataloaders = unet_dataloaders
         self.file_folder = file_folder
+        self.classifier_name = classifier_name
 
         self.classifier_trainer = ClassifierTrainer(
             classifier=self.classifier,
             unet=self.unet,
-            dataloaders=self.classifier_dataloaders
+            dataloaders=self.classifier_dataloaders,
         )  
 
         self.alignment_trainer = AlignmentTrainer(
@@ -427,12 +462,18 @@ class FullTrainer:
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
 
-        best_layer_val = 1e7
-        best_layer_acc = 0
+        best_layer_val_loss = 1e7
+        best_layer_val_acc = 0
+
+        best_layer_test_loss = 1e7
+        best_layer_test_acc = 0
+        
         best_layer = 1000
 
         inter_layer_distances = []
         intra_layer_distances = []
+        classifier_val_accs = []
+        classifier_test_accs = []
 
         ebsw_plotter = EBSW_Plotter(
             dataloaders=self.unet_dataloaders,
@@ -511,17 +552,26 @@ class FullTrainer:
             inter_layer_distances.append(inter)
             intra_layer_distances.append(intra)
 
-            classifier_val, classifier_acc = self.classifier_trainer.evaluate_model(
+            classifier_val_loss, classifier_val_acc = self.classifier_trainer.evaluate_model(
                 device=device,
-                use_unet=True
             )
+            classifier_val_accs.append(classifier_val_acc)
 
-            if classifier_val < best_layer_val:
-                best_layer_val = classifier_val
+            classifier_test_loss, classifier_test_acc = self.classifier_trainer.evaluate_model(
+                device=device, test=True
+            )
+            classifier_test_accs.append(classifier_test_acc)
+
+            if classifier_val_acc > best_layer_val_acc:
+                best_layer_val_acc = classifier_val_acc
+                best_layer_val_loss = classifier_val_loss
+
+                best_layer_test_acc = classifier_test_acc
+                best_layer_test_loss = classifier_test_loss
+                
                 best_layer = start_layer
-                best_layer_acc = classifier_acc
 
-        logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {classifier_val} | {best_layer_acc*100:.4f} ")
+        logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
         classifier_best_fname = classifier_fname[:-3] + f"-{best_layer}.pt"
         unet_best_fname = unet_fname[:-3] + f"-{best_layer}.pt"
 
@@ -530,13 +580,25 @@ class FullTrainer:
 
         inter_layer_distances = np.array(inter_layer_distances)
         intra_layer_distances = np.array(intra_layer_distances)
+        classifier_val_accs = np.array(classifier_val_accs)
 
-        np.save(
-            path.join(self.file_folder, "inter_layer_distances.npy"), inter_layer_distances
-        )
+        model_name = self.classifier_name
+        inter_fname = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
+        intra_fname = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
+        val_fname = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
+        test_fname = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
+        div_plots_fname = path.join(self.file_folder, f"{model_name}-divergence_plots")
 
-        np.save(
-            path.join(self.file_folder, "intra_layer_distances.npy"), intra_layer_distances
+        np.save(val_fname, classifier_val_accs)
+        np.save(test_fname, classifier_test_accs)
+        np.save(inter_fname, inter_layer_distances)
+        np.save(intra_fname, intra_layer_distances)
+
+        divergence_plots(
+            inter_data=inter_layer_distances,
+            intra_data=intra_layer_distances,
+            val_acc_values=classifier_val_accs,
+            fname=div_plots_fname
         )
 
 class Trainer:
@@ -1007,11 +1069,6 @@ class Trainer:
         running_loss = 0.0
         correct = 0
         total = 0
-
-        # if mode == "base_only":
-        #     dataloader.dataset.dataset.unique_sources = True 
-        # else:
-        #     dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
@@ -1234,8 +1291,17 @@ class PreloaderTrainer:
         self.val_loader: DataLoader = dataloaders.val_loader
 
         self.unet = unet
+        self.unet.apply(self.init_weights)
+        
         if unet_load_path:
             self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
+
+    def init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+                
 
     def unet_preloader_train_loop(self, ae_filename, unet_filename, device, num_epochs=100, train_both=True):
         if self.autoencoder == None:
@@ -1255,7 +1321,7 @@ class PreloaderTrainer:
             self.autoencoder.to(device)
 
             for epoch in range(num_epochs):
-                self.unet.train()
+                self.autoencoder.train()
                 for base, aux, _ in self.train_loader:
                     ae_optimizer.zero_grad()
                     base = base.to(device)
@@ -1268,9 +1334,10 @@ class PreloaderTrainer:
                     loss = nn.MSELoss()(output, combined_input)
 
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), 1)
                     ae_optimizer.step()
 
-                self.unet.eval()
+                self.autoencoder.eval()
                 total_loss = 0
                 with torch.no_grad():
                     for base, aux, _ in self.val_loader:
@@ -1291,10 +1358,18 @@ class PreloaderTrainer:
                     best_ae_val = total_loss
                     torch.save(self.autoencoder.state_dict(), ae_filename)
 
-        logger.info(log_message)
+                logger.info(log_message)
+
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
 
-        unet_optimizer = optim.Adam(self.unet.parameters(), lr=1e-3, weight_decay=1e-5)
+        for name, param in self.autoencoder.named_parameters():
+            if param.grad is not None:
+                if torch.isnan(param.grad).any():
+                    print(f"NaN detected in gradient of {name}")
+                if torch.isinf(param.grad).any():
+                    print(f"Inf detected in gradient of {name}")
+                    
+        unet_optimizer = optim.Adam(self.unet.parameters(), lr=3e-5, weight_decay=1e-5)
 
         best_unet_val = 1e7
 
@@ -1303,32 +1378,33 @@ class PreloaderTrainer:
 
         self.autoencoder.eval()
         for epoch in range(num_epochs):
-            self.autoencoder.train()
-            for base, aux, labels in self.train_loader:
-                labels = labels.long()
+            self.unet.train()
+            self._unet_run(
+                autoencoder=self.autoencoder,
+                unet_model=self.unet,
+                optimizer=unet_optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                train=True
+            )
 
-                base = base.to(device)
-                aux = aux.to(device)
-                labels = labels.to(device)
-
-                self._unet_run(
-                    autoencoder=self.autoencoder,
-                    unet_model=self.unet,
-                    optimizer=unet_optimizer,
-                    dataloader=self.train_loader,
-                    device=device,
-                    train=True
-                )
-
-                epoch_loss = self._unet_run(
-                    autoencoder=self.autoencoder,
-                    unet_model=self.unet,
-                    optimizer=None,
-                    dataloader=self.val_loader,
-                    device=device,
-                    train=False
-                )
-
+            #for name, param in self.unet.named_parameters():
+            #    if param.grad is not None:
+            #        if torch.isnan(param.grad).any():
+            #            print(f"NaN detected in gradient of {name}")
+            #        if torch.isinf(param.grad).any():
+            #            print(f"Inf detected in gradient of {name}")
+            torch.nn.utils.clip_grad_norm_(self.unet.parameters(), 1)
+            
+            epoch_loss = self._unet_run(
+                autoencoder=self.autoencoder,
+                unet_model=self.unet,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                train=False
+            )
+            
             log_message = f"\tUNET Epoch {epoch+1}: {epoch_loss:.4f}"
 
             if epoch_loss < best_unet_val:
@@ -1374,10 +1450,20 @@ class PreloaderTrainer:
                 unet_model = self.unet,
                 optimizer = optimizer,
                 dataloader = self.val_loader,
-                mode = "both",
+                mode = "base_only",
                 device = device,
                 train = False
             )
+            
+            test_loss, test_acc = self._classification_run(
+                model = self.classifier,
+                unet_model = self.unet,
+                optimizer = optimizer,
+                dataloader = self.test_loader,
+                mode = "base_only",
+                device = device,
+                train = False
+            )        
 
             log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {train_acc*100:.2f} {val_loss:.4f} {val_acc*100:.2f}"
 
@@ -1390,18 +1476,29 @@ class PreloaderTrainer:
 
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
-    def evaluate_model(self, device):
-        _, val_acc = self._classification_run(
-            model=self.classifier,
-            unet_model=self.unet,
-            optimizer=None,
-            dataloader=self.val_loader,
-            device=device,
-            mode="base_only",
-            train=False,
-        )
+    def evaluate_model(self, device, test=False):
+        if test:
+            _, acc = self._classification_run(
+                model=self.classifier,
+                unet_model=None,
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                mode="base_only",
+                train=False,
+            )
+        else:
+            _, acc = self._classification_run(
+                model=self.classifier,
+                unet_model=None,
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                mode="base_only",
+                train=False,
+            )
 
-        return val_acc             
+        return acc             
 
     def _unet_run(self, autoencoder, unet_model, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
@@ -1419,20 +1516,43 @@ class PreloaderTrainer:
 
         for base_samples, aux_samples, _ in dataloader: 
             base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+            #logger.info(f"Sample mins: {base_samples.min().item()}, {aux_samples.min().item()}")
+            #logger.info(f"Sample maxs: {base_samples.max().item()}, {aux_samples.max().item()}")
             if train:
                 optimizer.zero_grad()
 
+            #rnd1 = torch.randn_like(base_samples)
+            #rnd2 = torch.randn_like(aux_samples)
+            #out1 = autoencoder(rnd1)
+            #out2 = autoencoder(rnd2)
+            #print(f"Random diff: {torch.abs(out1[-1] - out2[-1]).max().item()}")
+            
             with torch.set_grad_enabled(train):
+                #logger.info(f"Samples {torch.isnan(aux_samples).any()}, {torch.isnan(aux_samples).sum()}")
                 unet_output = unet_model(aux_samples)[-1]
+                #logger.info(f"{unet_output.mean().item()} {unet_output.std().item()}")
+                #logger.info(f"UNET {torch.isnan(unet_output).any()}, {torch.isnan(unet_output).sum()}")
                 base_reps = autoencoder(base_samples)
+                #logger.info(f"{[base_reps[i].min().item() for i in range(len(base_reps))]}")
+                #logger.info(f"{[base_reps[i].max().item() for i in range(len(base_reps))]}")
+                #logger.info(f"Base {torch.isnan(base_reps).any()}, {torch.isnan(base_reps).sum()}") 
                 aux_reps = autoencoder(unet_output)
+                #logger.info(f"{[aux_reps[i].min().item() for i in range(len(aux_reps))]}")
+                #logger.info(f"{[aux_reps[i].max().item() for i in range(len(aux_reps))]}")  
+                #logger.info(f"Weights: {unet_model.latent_weight} {unet_model.noise_weight}")
+                #logger.info(f"Aux {torch.isnan(aux_reps).any()}, {torch.isnan(aux_reps).sum()}") 
             
             loss = 0
             for i in range(len(base_reps)//2):
                 base_reshaped = base_reps[i].view(base_reps[i].size(0), -1)
+                #logger.info(f"Base {torch.isnan(base_reshaped).any()}, {torch.isnan(base_reshaped).sum()}") 
                 aux_reshaped = aux_reps[i].view(aux_reps[i].size(0), -1)
+                #logger.info(f"Aux {torch.isnan(aux_reshaped).any()}, {torch.isnan(aux_reshaped).sum()}") 
                 loss += criterion(base_reshaped, aux_reshaped, L=256, device=device)
-
+                #logger.info(loss)
+                #np.save(np.array(base_reshaped.cpu()), f"files/base_re_{i}.npy")
+                #np.save(np.array(aux_reshaped.cpu().detach()), f"files/aux_re_{i}.npy")    
+                
             if train:
                 loss.backward()
                 optimizer.step()
@@ -1474,11 +1594,6 @@ class PreloaderTrainer:
         running_loss = 0.0
         correct = 0
         total = 0
-
-        if mode == "base_only":
-            dataloader.dataset.dataset.unique_sources = True 
-        else:
-            dataloader.dataset.dataset.unique_sources = True
         
         for base_samples, aux_samples, labels in dataloader:
             labels = labels.long()
@@ -1499,11 +1614,6 @@ class PreloaderTrainer:
                 else:
                     if unet_model != None:
                         aux_samples = unet_model(aux_samples)[-1]
-
-                    # logger.info(base_samples.shape)
-                    # logger.info(aux_samples.shape)
-                    # print(base_samples.shape)
-                    # print(aux_samples.shape)
 
                     inputs = torch.cat((base_samples, aux_samples), 0)
 

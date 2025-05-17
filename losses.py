@@ -262,7 +262,7 @@ def mmdfuse(
     kernels=("laplace", "gaussian"),
     lambda_multiplier=1,
     number_bandwidths=10,
-    number_permutations=1,  # set permutations to 1
+    number_permutations=0,  # set permutations to 0
     return_p_val=False,
     device=None,
 ):
@@ -288,7 +288,6 @@ def mmdfuse(
     assert 0 < alpha < 1
     assert lambda_multiplier > 0
     assert number_bandwidths > 1 and isinstance(number_bandwidths, int)
-    assert number_permutations > 0 and isinstance(number_permutations, int)
     if isinstance(kernels, str):
         kernels = (kernels,)
     all_kernels_l1 = (
@@ -335,7 +334,7 @@ def mmdfuse(
     V01 = torch.gather(V01i, 1, idx).t()
 
     N = number_bandwidths * number_kernels
-    M = torch.zeros((N, B + 1), device=device)
+    M = torch.zeros((N, 1), device=device)
     kernel_count = -1
 
     for r in range(2):
@@ -387,8 +386,7 @@ def mmdfuse(
                         * torch.sqrt(torch.tensor(n * (n - 1), device=device, dtype=torch.float))
                     )
 
-    all_statistics = torch.logsumexp(lambda_multiplier * M, dim=0) - torch.log(torch.tensor(N, device=device, dtype=torch.float))
-    original_statistic = all_statistics[-1]  # (1,)
+    original_statistic = torch.logsumexp(lambda_multiplier * M, dim=0)
     
     # Return the original_statistic for backprop, as requested
     return original_statistic

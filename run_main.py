@@ -114,7 +114,7 @@ def main(config_fname):
         elif "cifar10" in target_dataset.name.lower():
             config.dataset.target.train_size = 4000
         else:
-            config.dataset.target.train_size = int(target_ds_len * .85)
+            config.dataset.target.train_size = int(target_ds_len * .8)
         config.dataset.source.train_size = int((source_ds_len) * pct)
 
         config.dataset.target.val_size = int(target_ds_len * .1)
@@ -124,7 +124,7 @@ def main(config_fname):
         config.dataset.source.num_classes = source_dataset.num_classes
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 32 if img_size == "small" else 16
+        config.dataset.batch_size = 64 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
         config.unet.loss = unet_loss
@@ -137,13 +137,15 @@ def main(config_fname):
 
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(sys.path)
-
-        subprocess.run([
-            "python",
-            "main.py",
-            "--config_fname",
-            fname
-        ], env=env)
+        try:
+            subprocess.run([
+                "python",
+                "main.py",
+                "--config_fname",
+                fname
+            ], env=env)
+        except Exception as e:
+            print(f"Error: {e}")
 
 if __name__=="__main__":
     main()
