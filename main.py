@@ -33,7 +33,7 @@ def main(config_fname):
     # data stuff
     BATCH_SIZE: int = CONFIG.dataset.batch_size
     CLASSIFIER_ID: str = CONFIG.classifier.identifier
-    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}"
+    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}_6"
 
     # data size info
     TARGET_SIZE: int = CONFIG.dataset.target.train_size
@@ -318,7 +318,7 @@ def main(config_fname):
        num_epochs=100
     )
 
-    baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE)
+    baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
     logger.info(baseline_val_acc)
 
     logger.info("\nTraining Base Model")
@@ -337,7 +337,7 @@ def main(config_fname):
         unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
-        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID),
+        file_folder = FILE_FOLDER,
         classifier_name="base"
     )
 
@@ -400,7 +400,7 @@ def main(config_fname):
         unet_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
         unet_dataloaders=align_dl_set,
-        file_folder = os.path.join(FILE_FOLDER, CLASSIFIER_ID),
+        file_folder = FILE_FOLDER,
         classifier_name="contrast"
     )
 
@@ -421,13 +421,13 @@ def main(config_fname):
 
     #logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
 
-    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
+    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
 
-    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
+    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
     logger.info(f"Mixed Model Accuracy: {round(mixed_acc*100, 2)}%")
 
-    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False)
+    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
     logger.info(f"Contrastive Model Accuracy: {round(contrast_acc*100, 2)}%")
 
     logger.info("\nGenerating TSNE Plot")

@@ -530,12 +530,12 @@ class SmallCustomUNET(nn.Module):
         self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
         # Latent space normalization
-        self.latent_norm = nn.LayerNorm([base_channels * 16, 2, 2])  # For latent space (2x2 for 32x32 input)
-
+        #self.latent_norm = nn.LayerNorm([base_channels * 16, 2, 2])  # For latent space (2x2 for 32x32 input)
+        self.latent_norm = nn.Identity()
         # Noise addition
         self.noise_conv = nn.Conv1d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
         self.noise_weight = nn.Parameter(torch.tensor(0.05))
-        self.latent_weight = nn.Parameter(torch.tensor(1.0))
+        self.latent_weight = nn.Parameter(torch.tensor(0.95))
         
         # Decoder
         self.dec4 = self.conv_block(base_channels * (16 + 8), base_channels * 8)
@@ -561,7 +561,7 @@ class SmallCustomUNET(nn.Module):
     
     def get_normalized_weights(self):
         """Normalize noise and latent weights for blending."""
-        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
+        sum_weights = self.noise_weight.abs() + self.latent_weight.abs() +1e-8
         return (
             self.noise_weight.abs() / sum_weights,
             self.latent_weight.abs() / sum_weights,
@@ -974,8 +974,8 @@ class CustomAutoencoder(nn.Module):
         self.enc5 = self.conv_block(256, 512)
 
         # Latent space normalization
-        self.latent_norm = nn.LayerNorm([512, 2, 2])
-
+        #self.latent_norm = nn.LayerNorm([512, 2, 2])
+        self.latent_norm = nn.Identity()
         # Decoder
         self.dec5 = self.conv_block(512, 256)
         self.dec4 = self.conv_block(256, 128)

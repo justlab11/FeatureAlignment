@@ -4,10 +4,11 @@ import logging
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-
+from os import path
 
 from losses import ISEBSW, mmdfuse
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
+from helpers import make_unet
 
 class TSNE_Plotter:
     def __init__(self, dataloaders: DataLoaderSet, embed_size: int, bs:int):
@@ -262,12 +263,17 @@ class EBSW_Plotter:
         
         for i, (base, aux, _) in enumerate(dataloader):
             if base_only:
-                splits = torch.split(base, base.size(0) // 2)
+                try:
+                    splits = torch.split(base, base.size(0) // 2)
+                except:
+                    continue
                 dataset_1, dataset_2 = splits[0], splits[1]
             else:
-                splits_base = torch.split(base, base.size(0) // 2)
-                splits_aux = torch.split(aux, aux.size(0) // 2)
-
+                try:
+                    splits_base = torch.split(base, base.size(0) // 2)
+                    splits_aux = torch.split(aux, aux.size(0) // 2)
+                except:
+                    continue
                 dataset_1, dataset_2 = splits_base[0], splits_aux[0]
 
             dataset_1 = dataset_1.to(device)
@@ -504,11 +510,11 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     inter_data = torch.tensor(inter_data)
     intra_data = torch.tensor(intra_data)
 
-    inter_mean = np.mean(inter_data, axis=1)  # shape: (9, 8)
-    inter_std  = np.std(inter_data, axis=1)
+    inter_mean = torch.mean(inter_data, dim=1)  # shape: (9, 8)
+    inter_std  = torch.std(inter_data, dim=1)
 
-    intra_mean = np.mean(intra_data, axis=1)
-    intra_std  = np.std(intra_data, axis=1)
+    intra_mean = torch.mean(intra_data, dim=1)
+    intra_std  = torch.std(intra_data, dim=1)
 
     n = inter_mean.size(0)
     x = np.arange(n)
@@ -516,7 +522,7 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     # x_labels = ["8", "7-8", "6-8", "5-8", "4-8", "3-8", "2-8", "1-8", "Input-8"]
     offset = 0.08
 
-    fig, axes = plt.subplots(inter_mean.size(1)+1, 1, figsize=(6, (inter_mean.size(1)+1)*2)+2, sharex=True)
+    fig, axes = plt.subplots(inter_mean.size(1)+1, 1, figsize=(6, (inter_mean.size(1)+1)*2+2), sharex=True)
 
     # Top plot: y data
     axes[0].plot(x, val_acc_values, '-o', color='C2')
@@ -540,3 +546,46 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
     plt.close()
+
+def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
+    build_unet = make_unet(
+        size=32,
+        attention=False,
+        base_channels=2,
+        noise_channels=2
+    )
+    for x,y,_ in dataloader:
+        target = x[:16]
+        source = y[:16].to(device)
+        break
+
+    outputs = [target]
+    for unet_fname in unet_fname_set:
+        unet = buid_unet()
+        
+        unet.to(device)
+        unet.load_state_dict(torch.load(unet_fname, weights_only=True))
+
+        unet.eval()
+        outputs.append(unet(source)[-1].detach().cpu())
+        del unet
+
+    outputs.append(source)
+
+    num_entries = len(outputs)
+    num_items = 16
+
+    for item_idx in range(num_items):
+        fig, axs = plt.subplots(1, num_entries, figsize=(num_entries*2, 2))
+
+        for entry_idx, ax in enumerate(axs):
+            img = outputs[num_entries-entry_idx-1][item_idx]
+            if img.shape[0] == 3:
+                img.np.transpose(img, (1,2,0))
+
+            ax.imshow(img)
+            ax.axis("off")
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_folder, f"increment_image-{item_idx}.pdf"), dpi=300, bbox_inches='tight')
+        plt.close()
