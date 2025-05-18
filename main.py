@@ -236,15 +236,16 @@ def main(config_fname):
     )
 
     baseline_model_trainer = trainer.PreloaderTrainer(
-        autoencoder=baseline_autoencoder,
-        unet = baseline_unet,
+        autoencoder = baseline_autoencoder,
+        alignment_model = baseline_unet,
         classifier = baseline_classifier,
-        dataloaders=cls_dl_set
+        cls_dataloaders = cls_dl_set,
+        align_dataloaders=align_dl_set
     )
 
-    baseline_model_trainer.unet_preloader_train_loop(
+    baseline_model_trainer.alignment_preloader_train_loop(
         ae_filename=baseline_ae_filename,
-        unet_filename=baseline_unet_filename,
+        alignment_filename=baseline_unet_filename,
         device=DEVICE,
         train_both=True
     )
@@ -252,11 +253,12 @@ def main(config_fname):
     baseline_model_trainer.classification_train_loop(
        classifier_filename=baseline_classifier_filename,
        device=DEVICE,
-       num_epochs=100
+       num_epochs=100,
+       use_alignment=True
     )
 
-    baseline_val_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
-    logger.info(baseline_val_acc)
+    baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
+    logger.info(baseline_acc)
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
@@ -270,10 +272,10 @@ def main(config_fname):
 
     base_model_trainer = trainer.FullTrainer(
         classifier=model,
-        unet=unet,
-        unet_loss=LOSS,
+        alignment_model=unet,
+        alignment_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
-        unet_dataloaders=align_dl_set,
+        alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
         classifier_name="base"
     )
@@ -284,7 +286,7 @@ def main(config_fname):
             device=DEVICE,
             num_epochs=CONFIG.classifier.num_epochs,
             target_only=True,
-            use_unet=False
+            use_alignment=False
         )
     else:
         base_model_trainer.classifier.load_state_dict(torch.load(base_model_file))
@@ -301,10 +303,10 @@ def main(config_fname):
 
     mixed_model_trainer = trainer.FullTrainer(
         classifier=model,
-        unet=unet,
-        unet_loss=LOSS,
+        alignment_model=unet,
+        alignment_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
-        unet_dataloaders=align_dl_set,
+        alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
         classifier_name="mixed"
     )
@@ -315,7 +317,7 @@ def main(config_fname):
             device=DEVICE,
             num_epochs=CONFIG.classifier.num_epochs,
             target_only=False,
-            use_unet=False
+            use_alignment=False
         )
     else:
         mixed_model_trainer.classifier.load_state_dict(torch.load(mixed_model_file))
@@ -333,10 +335,10 @@ def main(config_fname):
 
     contrast_model_trainer = trainer.FullTrainer(
         classifier=model,
-        unet=unet,
-        unet_loss=LOSS,
+        alignment_model=unet,
+        alignment_loss=LOSS,
         classifier_dataloaders=cls_dl_set,
-        unet_dataloaders=align_dl_set,
+        alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
         classifier_name="contrast"
     )
@@ -356,15 +358,15 @@ def main(config_fname):
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
     contrast_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
-    #logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
+    logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
 
-    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
+    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
 
-    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
+    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Mixed Model Accuracy: {round(mixed_acc*100, 2)}%")
 
-    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=False, test=True)
+    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Contrastive Model Accuracy: {round(contrast_acc*100, 2)}%")
 
     logger.info("\nGenerating TSNE Plot")
@@ -398,7 +400,7 @@ def main(config_fname):
         )
 
     logger.info("\nGenerating Energy-Based Wasserstein Distance Plot")
-    ebsw_plot_file = f"{IMAGE_FOLDER}/EBSW_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
         dataloaders=cls_dl_set,
@@ -422,7 +424,7 @@ def main(config_fname):
     mixed_examples_final_fname = f"{IMAGE_FOLDER}/mixed_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
     mixed_model_trainer.cascading_train_loop(
-        unet_fname=mixed_unet_final_fname,
+        alignment_fname=mixed_unet_final_fname,
         classifier_fname=mixed_classifier_final_fname,
         examples_fname=mixed_examples_final_fname,
         device=DEVICE,
@@ -434,7 +436,7 @@ def main(config_fname):
     contrast_examples_final_fname = f"{IMAGE_FOLDER}/contrast_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
 
     contrast_model_trainer.cascading_train_loop(
-        unet_fname=contrast_unet_final_fname,
+        alignment_fname=contrast_unet_final_fname,
         classifier_fname=contrast_classifier_final_fname,
         examples_fname=contrast_examples_final_fname,
         device=DEVICE,
@@ -442,15 +444,15 @@ def main(config_fname):
 
     logger.info("\nGetting Model Accuracy With UNET Models")
 
-    # logger.info(f"Baseline Model Accuracy: {round(baseline_val_acc*100, 2)}%")
+    logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
 
-    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE)
+    _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Base Model Accuracy w/ UNET: {round(base_acc*100, 2)}%")
 
-    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=True)
+    _, mixed_acc = mixed_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Mixed Model Accuracy w/ UNET: {round(mixed_acc*100, 2)}%")
 
-    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_unet=True)
+    _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Contrastive Model Accuracy w/ UNET: {round(contrast_acc*100, 2)}%")
 
     logger.info("Generating Image Example Plots")
@@ -459,14 +461,14 @@ def main(config_fname):
 
     plotters.plot_examples(
         dataset=train_ds,
-        unet_model=mixed_model_trainer.unet,
+        alignment_model=mixed_model_trainer.alignment_model,
         filename=mixed_example_file,
         device=DEVICE
     )
 
     plotters.plot_examples(
         dataset=train_ds,
-        unet_model=contrast_model_trainer.unet,
+        alignment_model=contrast_model_trainer.alignment_model,
         filename=contrast_example_file,
         device=DEVICE
     )
@@ -487,10 +489,10 @@ def main(config_fname):
         contrast=contrast_acc
     )
 
-    unets = type_defs.ModelSet(
+    alignment_models = type_defs.ModelSet(
         base=None,
-        mixed=mixed_model_trainer.unet,
-        contrast=contrast_model_trainer.unet
+        mixed=mixed_model_trainer.alignment_model,
+        contrast=contrast_model_trainer.alignment_model
     )
     if TARGET_NUM_CLASSES == 10 and SOURCE_NUM_CLASSES == 10:
         tsne_plotter = plotters.TSNE_Plotter(
@@ -501,7 +503,7 @@ def main(config_fname):
 
         tsne_plotter.plot_tsne(
             models=model_set,
-            unet_models=unets,
+            unet_models=alignment_models,
             accuracies=accuracies,
             device=DEVICE,
             filename=tsne_plot_file,
@@ -510,7 +512,7 @@ def main(config_fname):
         )
 
     logger.info("Generating Energy-Based Wasserstein Distance Plot")
-    ebsw_plot_file = f"{IMAGE_FOLDER}{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_UNET_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
         dataloaders=cls_dl_set,
@@ -520,7 +522,7 @@ def main(config_fname):
 
     ebsw_plotter.plot_ebsw(
         models=model_set,
-        unet_models=unets,
+        alignment_models=alignment_models,
         layers=[i for i in range(num_layers-1)],
         device=DEVICE,
         filename=ebsw_plot_file,
