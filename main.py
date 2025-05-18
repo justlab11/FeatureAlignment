@@ -135,13 +135,21 @@ def main(config_fname):
 
     target_train_split, target_test_split, target_val_split = helpers.build_splits(
         folder=target_dir,
-        split_pcts=target_splits,
+        split_pcts=[
+            CONFIG.dataset.target.train_pct,
+            CONFIG.dataset.target.val_pct,
+            1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
+        ],
         seed=RNG
     )
     
     source_train_split, source_test_split, source_val_split = helpers.build_splits(
         folder=source_dir,
-        split_pcts=source_splits,
+        split_pcts=[
+            CONFIG.dataset.source.train_pct,
+            CONFIG.dataset.source.val_pct,
+            1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
+        ],
         seed=RNG
     )
 
