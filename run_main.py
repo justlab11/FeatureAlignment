@@ -110,11 +110,9 @@ def main(config_fname):
         config.dataset.source.folder = source_dataset.folder
 
         if "mnist" in target_dataset.name.lower():
-            total = len(glob(os.path.join(target_dataset.folder, "*", "*")))
-            config.dataset.target.train_pct = min(1.0, 1000 / total)
+            config.dataset.target.train_pct = min(1.0, 1000 / target_ds_len)
         elif "cifar10" in target_dataset.name.lower():
-            total = len(glob(os.path.join(target_dataset.folder, "*", "*")))
-            config.dataset.target.train_pct = min(1.0, 4000 / total)
+            config.dataset.target.train_pct = min(1.0, 4000 / source_ds_len)
         else:
             config.dataset.target.train_pct = .8
 
