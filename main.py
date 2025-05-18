@@ -5,7 +5,7 @@ import os
 from typing import Literal, Callable
 import logging
 import click
-import gc
+import random
 
 import datasets
 import helpers
@@ -33,37 +33,43 @@ def main(config_fname):
     # data stuff
     BATCH_SIZE: int = CONFIG.dataset.batch_size
     CLASSIFIER_ID: str = CONFIG.classifier.identifier
-    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}_6"
+    
+    unet_name = "attention_unet" if CONFIG.unet.attention else "unet"
+    CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}-{CONFIG.classifier.model}-{unet_name}"
 
     # data size info
     TARGET_SIZE: int = CONFIG.dataset.target.train_size
     SOURCE_SIZE: int = CONFIG.dataset.source.train_size
 
     LOSS: str = CONFIG.unet.loss
+    RNG: int = CONFIG.dataset.rng_seed
     TARGET_NUM_CLASSES: int = CONFIG.dataset.target.num_classes
     SOURCE_NUM_CLASSES: int = CONFIG.dataset.source.num_classes
-
-    # create a sub directory to go in the folders (stores the data in a folder related to the model information)
-    unet_name = "attention_unet" if CONFIG.unet.attention else "unet"
-    SUB_FOLDER = f"{CONFIG.classifier.model}-{unet_name}" 
 
     # folder locations
     MODEL_FOLDER: str = os.path.join(
         CLASSIFIER_ID,
-        SUB_FOLDER,
-        CONFIG.save_locations.model_folder,
+        "models",
     )
     FILE_FOLDER: str = os.path.join(
         CLASSIFIER_ID,
-        SUB_FOLDER,
-        CONFIG.save_locations.file_folder,
+        "files",
     )
     IMAGE_FOLDER: str = os.path.join(
         CLASSIFIER_ID,
-        SUB_FOLDER,
-        CONFIG.save_locations.image_folder,
+        "images",
     )
 
+    log_folder: str = os.path.join(
+        CLASSIFIER_ID,
+        "logs",
+    )
+
+    print(f"Run location: {CLASSIFIER_ID}")
+    for folder in [MODEL_FOLDER, FILE_FOLDER, IMAGE_FOLDER, log_folder]:
+        os.makedirs(folder, exist_ok=True)
+
+    # function to build unet with given parameters
     build_unet: Callable = helpers.make_unet(
         size=CONFIG.dataset.image_size,
         attention=CONFIG.unet.attention,
@@ -71,26 +77,15 @@ def main(config_fname):
         noise_channels=CONFIG.unet.noise_channels
     )
 
-    log_folder: str = os.path.join(
-        CLASSIFIER_ID,
-        SUB_FOLDER,
-        CONFIG.save_locations.logs_folder,
-    )
-
-    print(f"Run location: {os.path.join(CLASSIFIER_ID, SUB_FOLDER)}")
-    for folder in [MODEL_FOLDER, FILE_FOLDER, IMAGE_FOLDER]:
-        os.makedirs(folder, exist_ok=True)
-
-    os.makedirs(log_folder, exist_ok=True)
-
     # enable reproducibility
+    torch.manual_seed(RNG)
+    torch.cuda.manual_seed(RNG)
+    np.random.seed(RNG)
     torch.backends.cudnn.deterministic = True
-    torch.manual_seed(CONFIG.dataset.rng_seed)
-    torch.cuda.manual_seed(CONFIG.dataset.rng_seed)
-    np.random.seed(CONFIG.dataset.rng_seed)
+    random.seed(RNG)
 
     # start logging
-    log_location: str = os.path.join(log_folder, f"run_{CLASSIFIER_ID}_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.log")
+    log_location: str = os.path.join(log_folder, f"run_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.log")
     level: int = logging.DEBUG if CONFIG.verbose else logging.INFO
 
     logging.basicConfig(
@@ -107,7 +102,9 @@ def main(config_fname):
     logger.info(f"Source Dataset: {SOURCE}\n")
 
     # dataset creation
-    logger.info("Creating Datasets")
+    logger.info("CREATING DATASETS")
+    logger.info("-----------------")
+
     target_dir: str = CONFIG.dataset.target.folder
     source_dir: str = CONFIG.dataset.source.folder
 
@@ -124,114 +121,53 @@ def main(config_fname):
             transforms.ToTensor(),
         ])
 
-    target_full_dataset: datasets.HEIFFolder = datasets.HEIFFolder(
-        target_dir, transform=transform
+    target_train_split, target_test_split, target_val_split = helpers.build_splits(
+        folder=target_dir,
+        split_pcts=CONFIG.dataset.target.splits,
+        seed=RNG
     )
-    target_inds: np.ndarray = np.arange(len(target_full_dataset))
-    np.random.shuffle(target_inds)
-
-    target_train_end = CONFIG.dataset.target.train_size
-    target_val_end = target_train_end + CONFIG.dataset.target.val_size
-
-    target_train_inds: np.ndarray = target_inds[:target_train_end]
-    target_val_inds: np.ndarray = target_inds[target_train_end:target_val_end]
-    target_test_inds: np.ndarray = target_inds[target_val_end:]
-
-    source_full_dataset: datasets.HEIFFolder = datasets.HEIFFolder(
-        source_dir, transform=transform
-    )
-    source_inds: np.ndarray = np.arange(len(source_full_dataset))
-    np.random.shuffle(source_inds)
-
-    source_train_end = CONFIG.dataset.source.train_size
-    source_val_end = source_train_end + CONFIG.dataset.source.val_size
-
-    source_train_inds: np.ndarray = source_inds[:source_train_end]
-    source_val_inds: np.ndarray = source_inds[source_train_end:source_val_end]
-    source_test_inds: np.ndarray = source_inds[source_val_end:]
-
-    target_train_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=target_full_dataset,
-        indices=target_train_inds
-    )
-    target_test_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=target_full_dataset,
-        indices=target_test_inds
-    )
-    target_val_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=target_full_dataset,
-        indices=target_val_inds
-    )
-
-    source_train_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=source_full_dataset,
-        indices=source_train_inds
-    )
-    source_test_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=source_full_dataset,
-        indices=source_test_inds
-    )
-    source_val_ds: datasets.IndexedDataset = datasets.IndexedDataset(
-        dataset=source_full_dataset,
-        indices=source_val_inds
+    
+    source_train_split, source_test_split, source_val_split = helpers.build_splits(
+        folder=source_dir,
+        split_pcts=CONFIG.dataset.source.splits,
+        seed=RNG
     )
 
     train_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        base_dataset=target_train_ds,
-        aux_dataset=source_train_ds
+        data_folder=target_dir,
+        target_split_samples=target_train_split,
+        source_split_samples=source_train_split,
+        transform=transform
     )
 
     test_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        base_dataset=target_test_ds,
-        aux_dataset=source_train_ds
+        data_folder=target_dir,
+        target_split_samples=target_test_split,
+        source_split_samples=source_test_split,
+        transform=transform
     )
 
     val_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        base_dataset=target_val_ds,
-        aux_dataset=source_train_ds
+        data_folder=target_dir,
+        target_split_samples=target_val_split,
+        source_split_samples=source_val_split,
+        transform=transform
     )
 
-    logger.info(f"\tTrain Dataset Size: {len(train_ds)} (Target: {len(target_train_ds)}, Source: {len(source_train_ds)})")
-    logger.info(f"\tTest Dataset Size: {len(test_ds)} (Target: {len(target_test_ds)}, Source: {len(source_test_ds)})")
-    logger.info(f"\tValidation Dataset Aux Size: {len(val_ds)} (Target: {len(target_val_ds)}, Source: {len(source_val_ds)})")
-
-
-    logger.info("TRAIN TARGET")
-    for class_label, samples in train_ds.base_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    logger.info("TRAIN SOURCE")
-    for class_label, samples in train_ds.aux_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    logger.info("TEST TARGET")
-    for class_label, samples in test_ds.base_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    logger.info("TEST SOURCE")
-    for class_label, samples in test_ds.aux_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    logger.info("VAL TARGET")
-    for class_label, samples in val_ds.base_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    logger.info("VAL SOURCE")
-    for class_label, samples in val_ds.aux_dataset.class_samples.items():
-        logger.info(f"Class {class_label}: {len(samples)} samples")
-
-    drop_last = False
+    logger.info(f"\tTrain Dataset - Target: {train_ds.get_target_size()}, Source: {train_ds.get_source_size()}")
+    logger.info(f"\tTest Dataset - Target: {test_ds.get_target_size()}, Source: {test_ds.get_source_size()}")
+    logger.info(f"\tValidation Dataset - Target: {val_ds.get_target_size()}, Source: {val_ds.get_source_size()}")
 
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=drop_last, pin_memory=True
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=False, pin_memory=True
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=drop_last
+        test_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False
     )
 
     cls_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=drop_last
+        val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False
     )
 
     cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
@@ -244,21 +180,21 @@ def main(config_fname):
         data_source=train_ds,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        drop_last=drop_last
+        drop_last=False
     )
 
     test_sampler = samplers.PureBatchSampler(
         data_source=test_ds,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        drop_last=drop_last
+        drop_last=False
     )
 
     val_sampler = samplers.PureBatchSampler(
         data_source=val_ds,
         batch_size=BATCH_SIZE,
         shuffle=False,
-        drop_last=drop_last
+        drop_last=False
     )
 
     align_train_loader = torch.utils.data.DataLoader(
@@ -284,7 +220,8 @@ def main(config_fname):
         logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
 
-    logger.info("TRAINING CLASSIFIERS\n--------------------")
+    logger.info("TRAINING CLASSIFIERS")
+    logger.info("--------------------")
 
     logger.info("\nTraining Baseline Model")
     baseline_ae_filename = f"{MODEL_FOLDER}/baseline_autoencoder_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
