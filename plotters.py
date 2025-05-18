@@ -440,45 +440,45 @@ class EBSW_Plotter:
 
         plt.close(fig)
 
-def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
-    """
-    Plots a grid of example images: original, source, and aligned output.
+    def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
+        """
+        Plots a grid of example images: original, source, and aligned output.
 
-    Args:
-        dataset: Dataset object supporting indexing.
-        alignment_model: Model used to transform the source image.
-        filename: Output filename for the plot (PDF).
-        device: Torch device for model inference.
-        num_samples: Number of examples to plot (default: 10).
-    """
-    alignment_model.eval()
-    num_samples = min(num_samples, len(dataset))
-    random_samples = np.random.choice(len(dataset), num_samples, replace=False)
+        Args:
+            dataset: Dataset object supporting indexing.
+            alignment_model: Model used to transform the source image.
+            filename: Output filename for the plot (PDF).
+            device: Torch device for model inference.
+            num_samples: Number of examples to plot (default: 10).
+        """
+        alignment_model.eval()
+        num_samples = min(num_samples, len(dataset))
+        random_samples = np.random.choice(len(dataset), num_samples, replace=False)
 
-    fig, axes = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
+        fig, axes = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
 
-    for i, sample_idx in enumerate(random_samples):
-        target, source, label = dataset[sample_idx]
-        source_adjusted = source.unsqueeze(0).to(device)
-        source_adjusted = alignment_model(source_adjusted)[-1][0]
+        for i, sample_idx in enumerate(random_samples):
+            target, source, label = dataset[sample_idx]
+            source_adjusted = source.unsqueeze(0).to(device)
+            source_adjusted = alignment_model(source_adjusted)[-1][0]
 
-        target = np.transpose(target, (1, 2, 0))
-        source = np.transpose(source, (1, 2, 0))
-        source_adjusted = np.transpose(source_adjusted.detach().cpu(), (1, 2, 0))
+            target = np.transpose(target, (1, 2, 0))
+            source = np.transpose(source, (1, 2, 0))
+            source_adjusted = np.transpose(source_adjusted.detach().cpu(), (1, 2, 0))
 
-        axes[0, i].imshow(target)
-        axes[0, i].axis('off')
-        axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
+            axes[0, i].imshow(target)
+            axes[0, i].axis('off')
+            axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
 
-        axes[1, i].imshow(source)
-        axes[1, i].axis('off')
+            axes[1, i].imshow(source)
+            axes[1, i].axis('off')
 
-        axes[2, i].imshow(source_adjusted)
-        axes[2, i].axis('off')
+            axes[2, i].imshow(source_adjusted)
+            axes[2, i].axis('off')
 
-    plt.tight_layout()
-    plt.savefig(filename, format="pdf", dpi=300)
-    plt.close(fig)
+        plt.tight_layout()
+        plt.savefig(filename, format="pdf", dpi=300)
+        plt.close(fig)
 
     def divergence_plots(inter_data, intra_data, val_acc_values, fname):
         """
