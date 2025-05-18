@@ -153,7 +153,7 @@ class ClassifierTrainer:
         Returns:
             float: Average contrastive loss over the epoch.
         """
-        criterion = supervised_contrastive_loss
+        criterion = fully_supervised_contrastive_loss
         self.classifier.set_freeze_head(True)
         self.classifier.set_freeze_body(False)
         self.classifier.to(device)
@@ -195,7 +195,7 @@ class ClassifierTrainer:
                 features = self.classifier(inputs)[-1]
                 features = features.reshape(inputs.shape[0], -1)
                 projected = self.proj_head(features)
-                loss = criterion(projected, labels.repeat(2), temperature=temperature)
+                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
             
             if train:
                 loss.backward()
