@@ -814,14 +814,18 @@ class FullTrainer:
         )
 
 class PreloaderTrainer:
-    def __init__(self, autoencoder, alignment_model, classifier, dataloaders: DataLoaderSet):
+    def __init__(self, autoencoder, alignment_model, classifier, cls_dataloaders: DataLoaderSet, align_dataloaders: DataLoaderSet):
         self.autoencoder = autoencoder
         self.classifier = classifier
         self.alignment_model = alignment_model
 
-        self.train_loader: DataLoader = dataloaders.train_loader
-        self.test_loader: DataLoader = dataloaders.test_loader
-        self.val_loader: DataLoader = dataloaders.val_loader
+        self.train_loader: DataLoader = cls_dataloaders.train_loader
+        self.test_loader: DataLoader = cls_dataloaders.test_loader
+        self.val_loader: DataLoader = cls_dataloaders.val_loader
+
+        self.align_train_loader: DataLoader = align_dataloaders.train_loader
+        self.align_val_loader: DataLoader = align_dataloaders.val_loader
+        self.align_test_loader: DataLoader = align_dataloaders.test_loader
 
         self.alignment_model.apply(self.init_weights)
 
@@ -949,8 +953,6 @@ class PreloaderTrainer:
         
         return epoch_loss, epoch_accuracy
 
-
-                
     def alignment_preloader_train_loop(self, ae_filename, alignment_filename, device, num_epochs=100, train_both=True):
         if self.autoencoder is None:
             logger.error("No autoencoder found in trainer")
@@ -1015,7 +1017,7 @@ class PreloaderTrainer:
                 autoencoder=self.autoencoder,
                 alignment_model=self.alignment_model,
                 optimizer=alignment_optimizer,
-                dataloader=self.train_loader,
+                dataloader=self.align_train_loader, 
                 device=device,
                 train=True
             )
@@ -1024,7 +1026,7 @@ class PreloaderTrainer:
                 autoencoder=self.autoencoder,
                 alignment_model=self.alignment_model,
                 optimizer=None,
-                dataloader=self.val_loader,
+                dataloader=self.align_val_loader, 
                 device=device,
                 train=False
             )
@@ -1039,7 +1041,6 @@ class PreloaderTrainer:
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
         self.alignment_model.load_state_dict(torch.load(alignment_filename, weights_only=True))
-
 
 
     def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_alignment=False):
