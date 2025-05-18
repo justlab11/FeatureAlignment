@@ -32,7 +32,7 @@ class CombinedDataset(Dataset):
 
     def _initialize_mappings(self, data_folder: str):
         # make sure label <-> digit pairing is the same in all cases 
-        class_folders = sorted(glob.glob(os.path.join(data_folder, f"*")))
+        class_folders = sorted(glob.glob(os.path.join(data_folder, "*", "*")))
         for idx, folder in enumerate(class_folders):
             class_name = os.path.basename(folder)
             

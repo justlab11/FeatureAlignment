@@ -42,15 +42,17 @@ def main(config_fname):
 
     # data size info
     target_size = len(glob.glob(
-        os.path.join(target_dir, "*", "*")
+        os.path.join(target_dir, "**", "*"),
+        recursive=True
     ))
 
     source_size = len(glob.glob(
-        os.path.join(source_dir, "*", "*")
+        os.path.join(source_dir, "**", "*"),
+        recursive=True
     ))
 
-    TARGET_TRAIN_SIZE: int = int(CONFIG.dataset.target.train_pct * len(target_size))
-    SOURCE_TRAIN_SIZE: int = int(CONFIG.dataset.source.train_pct * len(source_size))
+    TARGET_TRAIN_SIZE: int = int(CONFIG.dataset.target.train_pct * target_size)
+    SOURCE_TRAIN_SIZE: int = int(CONFIG.dataset.source.train_pct * source_size)
 
     LOSS: str = CONFIG.unet.loss
     RNG: int = CONFIG.dataset.rng_seed
@@ -273,7 +275,7 @@ def main(config_fname):
        use_alignment=True
     )
 
-    baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
+    _, baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
     logger.info(baseline_acc)
 
     logger.info("\nTraining Base Model")

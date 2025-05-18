@@ -74,7 +74,7 @@ def main(config_fname):
     
     dataset_options = meta_config.datasets
     #dataset_sizes = [i/10 for i in range(1, 10)]
-    dataset_sizes = [.9]
+    dataset_sizes = [.7]
     combinations = list(itertools.product(
         meta_config.dataset_pairs,
         meta_config.image_sizes,

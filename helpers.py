@@ -6,6 +6,7 @@ from typing import List
 from glob import glob
 import os
 from sklearn.model_selection import train_test_split
+from collections import Counter
 
 from models import SmallCustomUNET, LargeCustomUNET, SmallAttentionUNET, LargeAttentionUNET
 
@@ -14,9 +15,11 @@ logger = logging.getLogger(__name__)
 def build_splits(folder: str, split_pcts: List[float], seed):
     # collect list of all files in the folder
     files = glob(
-        os.path.join(folder, "*", "*")
+        os.path.join(folder, "**", "*"),
+        recursive=True
     )
-
+    files = [f for f in files if os.path.isfile(f)]
+    print(len(files))    
     labels = []
     samples = []
 
@@ -26,20 +29,20 @@ def build_splits(folder: str, split_pcts: List[float], seed):
         labels.append(class_name)
         samples.append(f)
 
-    # collect split information
-    train_size, test_size, val_size = split_pcts
+    print(Counter(labels))
 
+    # collect split information
+    train_size, val_size, test_size = split_pcts
+    print(test_size)
     # build test set first
     X_temp, X_test, y_temp, y_test = train_test_split(
         samples, labels, test_size=test_size, random_state=seed, stratify=labels
     )
 
-    # readjust the validation set size
-    val_size_adjusted = val_size / (1 - test_size)
 
     # finalize train and val splits
     X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size_adjusted, random_state=seed, stratify=y_temp
+        X_temp, y_temp, test_size=val_size, random_state=seed, stratify=y_temp
     )
 
     # only return the lists of files (the labels are handled by the dataset class)
