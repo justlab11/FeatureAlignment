@@ -20,15 +20,15 @@ TEMPLATE_YAML = {
         "target": {
             "name": "MNIST",
             "folder": "data/mnist_v2",
-            "train_size": 1000,
-            "val_size": 3000,
+            "train_pct": 0.02,
+            "val_pct": 0.3,
             "num_classes": 10
         },
         "source": {
             "name": "SVHN",
             "folder": "data/house_mnist_32",
-            "train_size": 69000,
-            "val_size": 500,
+            "train_pct": 0.98,
+            "val_pct": 0.01,
             "num_classes": 10
         },
         "image_size": "small",
@@ -110,15 +110,18 @@ def main(config_fname):
         config.dataset.source.folder = source_dataset.folder
 
         if "mnist" in target_dataset.name.lower():
-            config.dataset.target.train_size = 1000
+            total = len(glob(os.path.join(target_dataset.folder, "*", "*")))
+            config.dataset.target.train_pct = min(1.0, 1000 / total)
         elif "cifar10" in target_dataset.name.lower():
-            config.dataset.target.train_size = 4000
+            total = len(glob(os.path.join(target_dataset.folder, "*", "*")))
+            config.dataset.target.train_pct = min(1.0, 4000 / total)
         else:
-            config.dataset.target.train_size = int(target_ds_len * .8)
-        config.dataset.source.train_size = int((source_ds_len) * pct)
+            config.dataset.target.train_pct = .8
 
-        config.dataset.target.val_size = int(target_ds_len * .1)
-        config.dataset.source.val_size = int((source_ds_len) * (1-pct)/2)
+        config.dataset.source.train_pct = pct
+
+        config.dataset.target.val_pct = min(.1, (1-config.dataset.target.train_pct)/2)
+        config.dataset.source.val_pct = (1-pct)/2
 
         config.dataset.target.num_classes = target_dataset.num_classes
         config.dataset.source.num_classes = source_dataset.num_classes
