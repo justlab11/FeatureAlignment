@@ -121,18 +121,6 @@ def main(config_fname):
             transforms.ToTensor(),
         ])
 
-    target_splits = [
-        CONFIG.dataset.target.train_pct,
-        CONFIG.dataset.target.test_pct,
-        CONFIG.dataset.target.val_pct
-    ]
-
-    source_splits = [
-        CONFIG.dataset.source.train_pct,
-        CONFIG.dataset.source.test_pct,
-        CONFIG.dataset.source.val_pct
-    ]
-
     target_train_split, target_test_split, target_val_split = helpers.build_splits(
         folder=target_dir,
         split_pcts=[

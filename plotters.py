@@ -440,97 +440,97 @@ class EBSW_Plotter:
 
         plt.close(fig)
 
-    def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
-        """
-        Plots a grid of example images: original, source, and aligned output.
+def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
+    """
+    Plots a grid of example images: original, source, and aligned output.
 
-        Args:
-            dataset: Dataset object supporting indexing.
-            alignment_model: Model used to transform the source image.
-            filename: Output filename for the plot (PDF).
-            device: Torch device for model inference.
-            num_samples: Number of examples to plot (default: 10).
-        """
-        alignment_model.eval()
-        num_samples = min(num_samples, len(dataset))
-        random_samples = np.random.choice(len(dataset), num_samples, replace=False)
+    Args:
+        dataset: Dataset object supporting indexing.
+        alignment_model: Model used to transform the source image.
+        filename: Output filename for the plot (PDF).
+        device: Torch device for model inference.
+        num_samples: Number of examples to plot (default: 10).
+    """
+    alignment_model.eval()
+    num_samples = min(num_samples, len(dataset))
+    random_samples = np.random.choice(len(dataset), num_samples, replace=False)
 
-        fig, axes = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
+    fig, axes = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
 
-        for i, sample_idx in enumerate(random_samples):
-            target, source, label = dataset[sample_idx]
-            source_adjusted = source.unsqueeze(0).to(device)
-            source_adjusted = alignment_model(source_adjusted)[-1][0]
+    for i, sample_idx in enumerate(random_samples):
+        target, source, label = dataset[sample_idx]
+        source_adjusted = source.unsqueeze(0).to(device)
+        source_adjusted = alignment_model(source_adjusted)[-1][0]
 
-            target = np.transpose(target, (1, 2, 0))
-            source = np.transpose(source, (1, 2, 0))
-            source_adjusted = np.transpose(source_adjusted.detach().cpu(), (1, 2, 0))
+        target = np.transpose(target, (1, 2, 0))
+        source = np.transpose(source, (1, 2, 0))
+        source_adjusted = np.transpose(source_adjusted.detach().cpu(), (1, 2, 0))
 
-            axes[0, i].imshow(target)
-            axes[0, i].axis('off')
-            axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
+        axes[0, i].imshow(target)
+        axes[0, i].axis('off')
+        axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
 
-            axes[1, i].imshow(source)
-            axes[1, i].axis('off')
+        axes[1, i].imshow(source)
+        axes[1, i].axis('off')
 
-            axes[2, i].imshow(source_adjusted)
-            axes[2, i].axis('off')
+        axes[2, i].imshow(source_adjusted)
+        axes[2, i].axis('off')
 
-        plt.tight_layout()
-        plt.savefig(filename, format="pdf", dpi=300)
-        plt.close(fig)
+    plt.tight_layout()
+    plt.savefig(filename, format="pdf", dpi=300)
+    plt.close(fig)
+    
+def divergence_plots(inter_data, intra_data, val_acc_values, fname):
+    """
+    Plots validation accuracy and inter/intra-domain distances across layer sets.
 
-    def divergence_plots(inter_data, intra_data, val_acc_values, fname):
-        """
-        Plots validation accuracy and inter/intra-domain distances across layer sets.
+    Args:
+        inter_data: 2D array (layers x comparisons) of inter-domain distances.
+        intra_data: 2D array (layers x comparisons) of intra-domain distances.
+        val_acc_values: 1D array of validation accuracies.
+        fname: Output filename for the plot (PDF).
+    """
+    inter_data = torch.tensor(inter_data)
+    intra_data = torch.tensor(intra_data)
 
-        Args:
-            inter_data: 2D array (layers x comparisons) of inter-domain distances.
-            intra_data: 2D array (layers x comparisons) of intra-domain distances.
-            val_acc_values: 1D array of validation accuracies.
-            fname: Output filename for the plot (PDF).
-        """
-        inter_data = torch.tensor(inter_data)
-        intra_data = torch.tensor(intra_data)
+    inter_mean = torch.mean(inter_data, dim=1)
+    inter_std  = torch.std(inter_data, dim=1)
 
-        inter_mean = torch.mean(inter_data, dim=1)
-        inter_std  = torch.std(inter_data, dim=1)
+    intra_mean = torch.mean(intra_data, dim=1)
+    intra_std  = torch.std(intra_data, dim=1)
 
-        intra_mean = torch.mean(intra_data, dim=1)
-        intra_std  = torch.std(intra_data, dim=1)
+    n = inter_mean.size(0)
+    x = np.arange(n)
+    # Custom x labels for layer sets
+    x_labels = [f"{i-1}" if i==n else (f"{i-1}-{n-1}" if i>1 else f"Input-{n-1}") for i in range(n, 0, -1)]
+    offset = 0.08
 
-        n = inter_mean.size(0)
-        x = np.arange(n)
-        # Custom x labels for layer sets
-        x_labels = [f"{i-1}" if i==n else (f"{i-1}-{n-1}" if i>1 else f"Input-{n-1}") for i in range(n, 0, -1)]
-        offset = 0.08
+    fig, axes = plt.subplots(inter_mean.size(1)+1, 1, figsize=(6, (inter_mean.size(1)+1)*2+2), sharex=True)
 
-        fig, axes = plt.subplots(inter_mean.size(1)+1, 1, figsize=(6, (inter_mean.size(1)+1)*2+2), sharex=True)
+    # Top plot: validation accuracy
+    axes[0].plot(x, val_acc_values, '-o', color='C2')
+    axes[0].set_ylabel('Accuracy (%)')
+    axes[0].set_title('Validation Accuracy on the Target Dataset')
+    axes[0].grid(True)
+    axes[0].set_xticks([])
 
-        # Top plot: validation accuracy
-        axes[0].plot(x, val_acc_values, '-o', color='C2')
-        axes[0].set_ylabel('Accuracy (%)')
-        axes[0].set_title('Validation Accuracy on the Target Dataset')
-        axes[0].grid(True)
-        axes[0].set_xticks([])
+    # Comparison subplots
+    for i in range(inter_mean.size(1)):
+        ax = axes[i+1]
+        ax.errorbar(x - offset, inter_mean[:, i], yerr=inter_std[:, i], fmt='-o', label='Inter-layer', color='C0')
+        ax.errorbar(x + offset, intra_mean[:, i], yerr=intra_std[:, i], fmt='-s', label='Intra-layer', color='C1')
+        ax.set_ylabel(f'Layer {i+1}')
+        ax.grid(True)
+        if i == 0:
+            ax.legend()
 
-        # Comparison subplots
-        for i in range(inter_mean.size(1)):
-            ax = axes[i+1]
-            ax.errorbar(x - offset, inter_mean[:, i], yerr=inter_std[:, i], fmt='-o', label='Inter-layer', color='C0')
-            ax.errorbar(x + offset, intra_mean[:, i], yerr=intra_std[:, i], fmt='-s', label='Intra-layer', color='C1')
-            ax.set_ylabel(f'Layer {i+1}')
-            ax.grid(True)
-            if i == 0:
-                ax.legend()
-
-        axes[-1].set_xlabel('Layer Set')
-        axes[-1].set_xticks(x)
-        axes[-1].set_xticklabels(x_labels)
-        fig.suptitle("Inter- and Intra-Domain Distances with Validation Accuracy")
-        plt.tight_layout(rect=[0, 0, 1, 0.97])
-        plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
-        plt.close()
+    axes[-1].set_xlabel('Layer Set')
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(x_labels)
+    fig.suptitle("Inter- and Intra-Domain Distances with Validation Accuracy")
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
+    plt.close()
 
 def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
     build_unet = make_unet(

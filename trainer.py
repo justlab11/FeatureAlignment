@@ -650,7 +650,7 @@ class FullTrainer:
 
         # calculate divergence performance before any alignment
         if self.alignment_loss == "ebsw":
-            inter: np.ndarray = ebsw_plotter.run_isebsw(
+            inter = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -660,7 +660,7 @@ class FullTrainer:
                 num_projections=256
             )
 
-            intra: np.ndarray = ebsw_plotter.run_isebsw(
+            intra = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -671,7 +671,7 @@ class FullTrainer:
             )
 
         else:
-            inter: np.ndarray = ebsw_plotter.run_mmdfuse(
+            inter = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -680,7 +680,7 @@ class FullTrainer:
                 alignment_model=None,
             )
 
-            intra: np.ndarray = ebsw_plotter.run_mmdfuse(
+            intra = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -722,7 +722,7 @@ class FullTrainer:
             )
 
             if self.alignment_loss == "ebsw":
-                inter: np.ndarray = ebsw_plotter.run_isebsw(
+                inter = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -732,7 +732,7 @@ class FullTrainer:
                     num_projections=256
                 )
 
-                intra: np.ndarray = ebsw_plotter.run_isebsw(
+                intra = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -743,7 +743,7 @@ class FullTrainer:
                 )
 
             else:
-                inter: np.ndarray = ebsw_plotter.run_mmdfuse(
+                inter = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -752,7 +752,7 @@ class FullTrainer:
                     alignment_model=self.alignment_model,
                 )
 
-                intra: np.ndarray = ebsw_plotter.run_mmdfuse(
+                intra = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -790,9 +790,9 @@ class FullTrainer:
         self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
         self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
 
-        inter_layer_distances: np.ndarray = np.array(inter_layer_distances)
-        intra_layer_distances: np.ndarray = np.array(intra_layer_distances)
-        classifier_val_accs: np.ndarray = np.array(classifier_val_accs)
+        inter_layer_distances = np.array(inter_layer_distances)
+        intra_layer_distances = np.array(intra_layer_distances)
+        classifier_val_accs = np.array(classifier_val_accs)
 
         model_name: str = self.classifier_name
         inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
