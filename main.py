@@ -5,6 +5,7 @@ import os
 from typing import Literal, Callable
 import logging
 import click
+import glob
 import random
 
 import datasets
@@ -25,6 +26,8 @@ def main(config_fname):
     CONFIG: type_defs.Config = type_defs.Config(**config_yaml)
 
     # define constants
+    target_dir: str = CONFIG.dataset.target.folder
+    source_dir: str = CONFIG.dataset.source.folder
 
     # domain names
     TARGET: str = CONFIG.dataset.target.name
@@ -38,8 +41,16 @@ def main(config_fname):
     CLASSIFIER_ID += f"-{CONFIG.dataset.image_size}-{CONFIG.unet.loss}-{CONFIG.classifier.model}-{unet_name}"
 
     # data size info
-    TARGET_SIZE: int = CONFIG.dataset.target.train_size
-    SOURCE_SIZE: int = CONFIG.dataset.source.train_size
+    target_size = len(glob.glob(
+        os.path.join(target_dir, "*", "*")
+    ))
+
+    source_size = len(glob.glob(
+        os.path.join(source_dir, "*", "*")
+    ))
+
+    TARGET_TRAIN_SIZE: int = int(CONFIG.dataset.target.train_pct * len(target_size))
+    SOURCE_TRAIN_SIZE: int = int(CONFIG.dataset.source.train_pct * len(source_size))
 
     LOSS: str = CONFIG.unet.loss
     RNG: int = CONFIG.dataset.rng_seed
@@ -85,7 +96,7 @@ def main(config_fname):
     random.seed(RNG)
 
     # start logging
-    log_location: str = os.path.join(log_folder, f"run_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.log")
+    log_location: str = os.path.join(log_folder, f"run_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.log")
     level: int = logging.DEBUG if CONFIG.verbose else logging.INFO
 
     logging.basicConfig(
@@ -104,9 +115,6 @@ def main(config_fname):
     # dataset creation
     logger.info("CREATING DATASETS")
     logger.info("-----------------")
-
-    target_dir: str = CONFIG.dataset.target.folder
-    source_dir: str = CONFIG.dataset.source.folder
 
     if CONFIG.dataset.image_size == "small":
         transform = transforms.Compose([
@@ -232,9 +240,9 @@ def main(config_fname):
     logger.info("--------------------")
 
     logger.info("\nTraining Baseline Model")
-    baseline_ae_filename = f"{MODEL_FOLDER}/baseline_autoencoder_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    baseline_unet_filename = f"{MODEL_FOLDER}/baseline_unet_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    baseline_classifier_filename = f"{MODEL_FOLDER}/baseline_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    baseline_ae_filename = f"{MODEL_FOLDER}/baseline_autoencoder_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    baseline_unet_filename = f"{MODEL_FOLDER}/baseline_unet_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    baseline_classifier_filename = f"{MODEL_FOLDER}/baseline_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     baseline_autoencoder = models.CustomAutoencoder()
     baseline_unet = build_unet()
@@ -269,7 +277,7 @@ def main(config_fname):
     logger.info(baseline_acc)
 
     logger.info("\nTraining Base Model")
-    base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
@@ -300,7 +308,7 @@ def main(config_fname):
         base_model_trainer.classifier.load_state_dict(torch.load(base_model_file))
 
     logger.info("\nTraining Mixed Model")
-    mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
@@ -331,8 +339,8 @@ def main(config_fname):
         mixed_model_trainer.classifier.load_state_dict(torch.load(mixed_model_file))
 
     logger.info("\nTraining Contrastive Model")
-    contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     model: models.DynamicResNet = models.DynamicResNet(
         resnet_type=CONFIG.classifier.model,
@@ -362,9 +370,9 @@ def main(config_fname):
         contrast_model_trainer.classifier.load_state_dict(torch.load(contrast_full_model_file))
 
     logger.info("\nGetting Model Accuracy")
-    base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    contrast_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
 
@@ -378,7 +386,7 @@ def main(config_fname):
     logger.info(f"Contrastive Model Accuracy: {round(contrast_acc*100, 2)}%")
 
     logger.info("\nGenerating TSNE Plot")
-    tsne_plot_file: str = f"{IMAGE_FOLDER}/TSNE_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    tsne_plot_file: str = f"{IMAGE_FOLDER}/TSNE_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     model_set = type_defs.ModelSet(
         base=base_model_trainer.classifier,
@@ -408,7 +416,7 @@ def main(config_fname):
         )
 
     logger.info("\nGenerating Energy-Based Wasserstein Distance Plot")
-    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
         dataloaders=cls_dl_set,
@@ -427,9 +435,9 @@ def main(config_fname):
     logger.info("\nSTARTING UNET/CLASSIFER TRAIN CYCLES\n------------------------------------")
 
     logger.info("Training UNET/Classifier for Mixed Model")
-    mixed_unet_final_fname = f"{MODEL_FOLDER}/mixed_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    mixed_classifier_final_fname = f"{MODEL_FOLDER}/mixed_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    mixed_examples_final_fname = f"{IMAGE_FOLDER}/mixed_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    mixed_unet_final_fname = f"{MODEL_FOLDER}/mixed_unet_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    mixed_classifier_final_fname = f"{MODEL_FOLDER}/mixed_classifier_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    mixed_examples_final_fname = f"{IMAGE_FOLDER}/mixed_examples_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     mixed_model_trainer.cascading_train_loop(
         alignment_fname=mixed_unet_final_fname,
@@ -439,9 +447,9 @@ def main(config_fname):
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
-    contrast_unet_final_fname = f"{MODEL_FOLDER}/contrast_unet_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_classifier_final_fname = f"{MODEL_FOLDER}/contrast_classifier_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
-    contrast_examples_final_fname = f"{IMAGE_FOLDER}/contrast_examples_FINAL_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pt"
+    contrast_unet_final_fname = f"{MODEL_FOLDER}/contrast_unet_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    contrast_classifier_final_fname = f"{MODEL_FOLDER}/contrast_classifier_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    contrast_examples_final_fname = f"{IMAGE_FOLDER}/contrast_examples_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
     contrast_model_trainer.cascading_train_loop(
         alignment_fname=contrast_unet_final_fname,
@@ -464,8 +472,8 @@ def main(config_fname):
     logger.info(f"Contrastive Model Accuracy w/ UNET: {round(contrast_acc*100, 2)}%")
 
     logger.info("Generating Image Example Plots")
-    mixed_example_file = f"{IMAGE_FOLDER}/mixed_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
-    contrast_example_file = f"{IMAGE_FOLDER}/contrast_examples_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    mixed_example_file = f"{IMAGE_FOLDER}/mixed_examples_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
+    contrast_example_file = f"{IMAGE_FOLDER}/contrast_examples_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     plotters.plot_examples(
         dataset=train_ds,
@@ -483,7 +491,7 @@ def main(config_fname):
 
 
     logger.info("\nGenerating TSNE w/ UNET Plot")
-    tsne_plot_file = f"{IMAGE_FOLDER}/TSNE_UNET_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    tsne_plot_file = f"{IMAGE_FOLDER}/TSNE_UNET_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     model_set = type_defs.ModelSet(
         base=base_model_trainer.classifier,
@@ -520,7 +528,7 @@ def main(config_fname):
         )
 
     logger.info("Generating Energy-Based Wasserstein Distance Plot")
-    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_UNET_{TARGET}={TARGET_SIZE}+{SOURCE}={SOURCE_SIZE}.pdf"
+    ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_UNET_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
         dataloaders=cls_dl_set,
