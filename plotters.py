@@ -283,7 +283,9 @@ class EBSW_Plotter:
                 if len(chunks) < 2:
                     continue
 
-                target_set, source_set = chunks
+                min_len = min(chunks[0].size(0), chunks[1].size(0))
+                target_set = chunks[0][:min_len]
+                source_set = chunks[1][:min_len]
 
             else:
                 chunks_target = torch.chunk(target, 2)
@@ -323,12 +325,14 @@ class EBSW_Plotter:
         alignment_models: ModelSet | None = None,
         num_projections: int = 128
     ):
+        include_alignment = True
         if alignment_models is None:
             alignment_models = ModelSet(
                 base=None,
                 mixed=None,
                 contrast=None
             )
+            include_alignment = False
 
         base_ebsw_inter = self.run_isebsw(
             model=models.base,
@@ -336,7 +340,7 @@ class EBSW_Plotter:
             layers=layers,
             target_only=True,
             device=device,
-            alignment_model=alignment_models.base,
+            alignment_model=None,
             num_projections=num_projections
         )
 
@@ -346,7 +350,7 @@ class EBSW_Plotter:
             layers=layers,
             target_only=True,
             device=device,
-            alignment_model=alignment_models.mixed,
+            alignment_model=None,
             num_projections=num_projections
         )
 
@@ -356,7 +360,7 @@ class EBSW_Plotter:
             layers=layers,
             target_only=True,
             device=device,
-            alignment_model=alignment_models.contrast,
+            alignment_model=None,
             num_projections=num_projections
         )
 
@@ -366,7 +370,7 @@ class EBSW_Plotter:
             layers=layers,
             target_only=False,
             device=device,
-            alignment_model=alignment_models.base,
+            alignment_model=None,
             num_projections=num_projections
         )
 
@@ -376,7 +380,7 @@ class EBSW_Plotter:
             layers=layers,
             target_only=False,
             device=device,
-            alignment_model=alignment_models.mixed,
+            alignment_model=None,
             num_projections=num_projections
         )
 
@@ -386,9 +390,46 @@ class EBSW_Plotter:
             layers=layers,
             target_only=False,
             device=device,
-            alignment_model=alignment_models.contrast,
+            alignment_model=None,
             num_projections=num_projections
         )
+
+        if include_alignment:
+            align_base_ebsw_intra = self.run_isebsw(
+                model=models.base,
+                dataloader=self.val_loader,
+                layers=layers,
+                target_only=False,
+                device=device,
+                alignment_model=alignment_models.base,
+                num_projections=num_projections
+            )
+
+            align_mixed_ebsw_intra = self.run_isebsw(
+                model=models.mixed,
+                dataloader=self.val_loader,
+                layers=layers,
+                target_only=False,
+                device=device,
+                alignment_model=alignment_models.mixed,
+                num_projections=num_projections
+            )
+
+            align_contrast_ebsw_intra = self.run_isebsw(
+                model=models.contrast,
+                dataloader=self.val_loader,
+                layers=layers,
+                target_only=False,
+                device=device,
+                alignment_model=alignment_models.contrast,
+                num_projections=num_projections
+            )
+
+            align_layer_measurements_inter = ModelSet(
+                base=align_base_ebsw_intra,
+                mixed=align_mixed_ebsw_intra,
+                contrast=align_contrast_ebsw_intra
+            ).dict()
 
         layer_measurements_inter = ModelSet(
             base=base_ebsw_inter,
@@ -406,11 +447,23 @@ class EBSW_Plotter:
         fig.suptitle('Energy-Based Sliced Wasserstein Loss Initial Layerwise Test Results', fontsize=22)
 
         categories = ['base', 'mixed', 'contrast']
-        modes = ['Target/Target', 'Target/Source']
-        colors = ['#1f77b4', '#ff7f0e']
+
+        if include_alignment:
+            mode_labels = ['Target/Target', 'Target/Source', "Target/Source Aligned"]
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+            modes = [layer_measurements_inter, layer_measurements_intra, align_layer_measurements_inter]
+            
+        else:
+            mode_labels = ['Target/Target', 'Target/Source']
+            colors = ['#1f77b4', '#ff7f0e']
+            modes = [layer_measurements_inter, layer_measurements_intra]
 
         for i, cat in enumerate(categories):
-            for j, mode in enumerate([layer_measurements_inter, layer_measurements_intra]):
+            for j, mode in enumerate(modes):
+                if i==0 and j==2:
+                    # if we are plotting the base model (i==0) with alignment (j==2)
+                    # just continue as base never has alignment so the plot is useless
+                    continue
                 data = mode[cat]
                 means = np.mean(data, axis=0)
                 stds = np.std(data, axis=0)
@@ -421,7 +474,7 @@ class EBSW_Plotter:
                     x, means, yerr=stds, capsize=5, marker='o',
                     color=colors[j], ecolor=colors[j],
                     markersize=8, linewidth=2, capthick=2,
-                    label=f'{modes[j]} Samples', linestyle='none'
+                    label=f'{mode_labels[j]} Samples', linestyle='none'
                 )
 
             axs[i].set_title(f'{cat.capitalize()} Model', fontsize=20)

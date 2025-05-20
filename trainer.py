@@ -10,7 +10,7 @@ import gc
 from typing import List
 
 from models import DynamicCNN
-from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
+from losses import supervised_contrastive_loss, ISEBSW, mmdfuse, fully_supervised_contrastive_loss
 from datasets import CombinedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
