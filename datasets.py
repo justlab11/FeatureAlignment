@@ -30,9 +30,18 @@ class CombinedDataset(Dataset):
             split_samples=source_split_samples, domain="source"
         )
 
+    def get_class_folders(self, root_dir):
+        result = []
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            if filenames:
+                result.append(dirpath)
+
+        return sorted(result)
+
     def _initialize_mappings(self, data_folder: str):
         # make sure label <-> digit pairing is the same in all cases 
-        class_folders = sorted(glob.glob(os.path.join(data_folder, "*", "*")))
+        class_folders = self.get_class_folders(data_folder)
+
         for idx, folder in enumerate(class_folders):
             class_name = os.path.basename(folder)
             
@@ -41,7 +50,7 @@ class CombinedDataset(Dataset):
 
             self.class_to_idx[class_name] = idx
             self.idx_to_class[idx] = class_name
-
+            
     def _populate_samples(self, split_samples: List[str], domain:str = "target"):
         samples = self.target_samples if domain=="target" else self.source_samples
         class_samples = self.target_class_samples if domain == "target" else self.source_class_samples

@@ -25,7 +25,7 @@ def build_splits(folder: str, split_pcts: List[float], seed):
 
     # populate samples and labels
     for f in files:
-        class_name = f.split('/')[-2]  # Assumes Unix-style paths
+        class_name = os.path.basename(os.path.dirname(f))  # Assumes Unix-style paths
         labels.append(class_name)
         samples.append(f)
 
@@ -33,12 +33,11 @@ def build_splits(folder: str, split_pcts: List[float], seed):
 
     # collect split information
     train_size, val_size, test_size = split_pcts
-    print(test_size)
+
     # build test set first
     X_temp, X_test, y_temp, y_test = train_test_split(
         samples, labels, test_size=test_size, random_state=seed, stratify=labels
     )
-
 
     # finalize train and val splits
     X_train, X_val, y_train, y_val = train_test_split(

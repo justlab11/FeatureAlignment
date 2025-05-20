@@ -125,7 +125,7 @@ def main(config_fname):
         config.dataset.source.num_classes = source_dataset.num_classes
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 64 if img_size == "small" else 16
+        config.dataset.batch_size = 32 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
         config.unet.loss = unet_loss

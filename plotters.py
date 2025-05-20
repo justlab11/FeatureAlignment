@@ -334,7 +334,7 @@ class EBSW_Plotter:
             model=models.base,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=True,
+            target_only=True,
             device=device,
             alignment_model=alignment_models.base,
             num_projections=num_projections
@@ -344,7 +344,7 @@ class EBSW_Plotter:
             model=models.mixed,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=True,
+            target_only=True,
             device=device,
             alignment_model=alignment_models.mixed,
             num_projections=num_projections
@@ -354,7 +354,7 @@ class EBSW_Plotter:
             model=models.contrast,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=True,
+            target_only=True,
             device=device,
             alignment_model=alignment_models.contrast,
             num_projections=num_projections
@@ -364,7 +364,7 @@ class EBSW_Plotter:
             model=models.base,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=False,
+            target_only=False,
             device=device,
             alignment_model=alignment_models.base,
             num_projections=num_projections
@@ -374,7 +374,7 @@ class EBSW_Plotter:
             model=models.mixed,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=False,
+            target_only=False,
             device=device,
             alignment_model=alignment_models.mixed,
             num_projections=num_projections
@@ -384,7 +384,7 @@ class EBSW_Plotter:
             model=models.contrast,
             dataloader=self.val_loader,
             layers=layers,
-            base_only=False,
+            target_only=False,
             device=device,
             alignment_model=alignment_models.contrast,
             num_projections=num_projections
@@ -492,6 +492,9 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     """
     inter_data = torch.tensor(inter_data)
     intra_data = torch.tensor(intra_data)
+
+    inter_data = inter_data[1:]
+    intra_data = intra_data[1:]
 
     inter_mean = torch.mean(inter_data, dim=1)
     inter_std  = torch.std(inter_data, dim=1)
