@@ -53,14 +53,6 @@ class ClassifierTrainer:
         self.test_loader: DataLoader= dataloaders.test_loader
         self.val_loader: DataLoader = dataloaders.val_loader
 
-        # in case we need to do contrastive learning, we build out a projection head
-        body_output_size: int = self.classifier.get_body_output_size()
-        self.proj_head: nn.Module = nn.Sequential(
-            nn.Linear(body_output_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64)
-        )
-
     def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_alignment=False):
         """
         Run one epoch of training or evaluation on the given dataset.
@@ -157,14 +149,11 @@ class ClassifierTrainer:
         self.classifier.set_freeze_head(True)
         self.classifier.set_freeze_body(False)
         self.classifier.to(device)
-        self.proj_head.to(device)
 
         if train:
             self.classifier.train()
-            self.proj_head.train()
         else:
             self.classifier.eval()
-            self.proj_head.eval()
         
         running_loss = 0.0
 
@@ -194,8 +183,7 @@ class ClassifierTrainer:
                 inputs = torch.cat((target_samples, source_samples), 0)
                 features = self.classifier(inputs)[-1]
                 features = features.reshape(inputs.shape[0], -1)
-                projected = self.proj_head(features)
-                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
+                loss = criterion(features, labels.repeat(2), group_labels, temperature=temperature)
             
             if train:
                 loss.backward()
@@ -230,10 +218,9 @@ class ClassifierTrainer:
         for temp in temp_range:
             logger.info(f"\tStarting temp: {temp}")
             self.classifier.reset_parameters()
-            self.reset_parameters(self.proj_head)
             
             optimizer = optim.Adam(
-                list(self.classifier.parameters()) + list(self.proj_head.parameters()),
+                self.classifier.parameters(),
                 lr=0.001, 
                 weight_decay=1e-5
             )
