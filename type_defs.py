@@ -7,8 +7,8 @@ import torch.nn as nn
 class DatasetConfig(BaseModel):
     name: str
     folder: str
-    train_size: int
-    val_size: int
+    train_pct: float
+    val_pct: float
     num_classes: int
 
 class DatasetRootConfig(BaseModel):

@@ -20,15 +20,15 @@ TEMPLATE_YAML = {
         "target": {
             "name": "MNIST",
             "folder": "data/mnist_v2",
-            "train_size": 1000,
-            "val_size": 3000,
+            "train_pct": 0.02,
+            "val_pct": 0.3,
             "num_classes": 10
         },
         "source": {
             "name": "SVHN",
             "folder": "data/house_mnist_32",
-            "train_size": 69000,
-            "val_size": 500,
+            "train_pct": 0.98,
+            "val_pct": 0.01,
             "num_classes": 10
         },
         "image_size": "small",
@@ -74,7 +74,7 @@ def main(config_fname):
     
     dataset_options = meta_config.datasets
     #dataset_sizes = [i/10 for i in range(1, 10)]
-    dataset_sizes = [.9]
+    dataset_sizes = [.7]
     combinations = list(itertools.product(
         meta_config.dataset_pairs,
         meta_config.image_sizes,
@@ -110,21 +110,22 @@ def main(config_fname):
         config.dataset.source.folder = source_dataset.folder
 
         if "mnist" in target_dataset.name.lower():
-            config.dataset.target.train_size = 1000
+            config.dataset.target.train_pct = min(1.0, 1000 / target_ds_len)
         elif "cifar10" in target_dataset.name.lower():
-            config.dataset.target.train_size = 4000
+            config.dataset.target.train_pct = min(1.0, 4000 / source_ds_len)
         else:
-            config.dataset.target.train_size = int(target_ds_len * .8)
-        config.dataset.source.train_size = int((source_ds_len) * pct)
+            config.dataset.target.train_pct = .8
 
-        config.dataset.target.val_size = int(target_ds_len * .1)
-        config.dataset.source.val_size = int((source_ds_len) * (1-pct)/2)
+        config.dataset.source.train_pct = pct
+
+        config.dataset.target.val_pct = min(.1, (1-config.dataset.target.train_pct)/2)
+        config.dataset.source.val_pct = (1-pct)/2
 
         config.dataset.target.num_classes = target_dataset.num_classes
         config.dataset.source.num_classes = source_dataset.num_classes
 
         config.dataset.image_size = img_size
-        config.dataset.batch_size = 64 if img_size == "small" else 16
+        config.dataset.batch_size = 32 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
         config.unet.loss = unet_loss

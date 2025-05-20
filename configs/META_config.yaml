@@ -75,7 +75,6 @@ image_sizes:
 
 unet_loss:
   - "ebsw"
-  - "mmdfuse"
 
 unet_attention:
   - False

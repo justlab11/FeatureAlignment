@@ -7,8 +7,6 @@ from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet15
 
 logger = logging.getLogger(__name__)
 
-## TODO: make sure this can work for resnet or any other model
-
 class DynamicCNN(nn.Module):
     def __init__(self, input_shape:tuple, num_filters:list=[32, 32], kernel_size:list=[3], stride:list=[1], padding:list=[1],
                  mlp_layer_sizes:list=[128, 64], num_classes:int=10):

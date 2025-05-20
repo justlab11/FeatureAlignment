@@ -1,17 +1,17 @@
 import torch
-from torchvision import transforms
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np 
 from os import path
 import logging
-from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 import gc
+from typing import List
 
 from models import DynamicCNN
-from losses import supervised_contrastive_loss, ISEBSW, mmdfuse
-from datasets import CombinedDataset, HEIFFolder, IndexedDataset
+from losses import supervised_contrastive_loss, ISEBSW, mmdfuse, fully_supervised_contrastive_loss
+from datasets import CombinedDataset
 from type_defs import DataLoaderSet
 from helpers import compute_layer_loss
 from plotters import plot_examples, EBSW_Plotter, divergence_plots
@@ -19,22 +19,49 @@ from plotters import plot_examples, EBSW_Plotter, divergence_plots
 logger = logging.getLogger(__name__)
 
 class ClassifierTrainer:
-    def __init__(self, classifier, unet, dataloaders: DataLoaderSet):
-        self.classifier = classifier
-        self.unet = unet
+    """
+    ClassifierTrainer handles all training, validation, contrastive learning, and evaluation routines for a classification model.
 
+    This class supports:
+        - Standard supervised training with flexible data loaders
+        - Supervised contrastive learning with temperature optimization
+        - Fine-tuning and evaluation workflows
+        - Optional integration of a alignment model for feature preprocessing
+        - Management of model checkpointing, parameter resets, and optimizer scheduling
+
+    Args:
+        classifier (nn.Module): The main classification model.
+        alignment_model (nn.Module): Optional alignment model for feature preprocessing or augmentation.
+        dataloaders (DataLoaderSet): Named tuple or object containing train, validation, and test DataLoader instances.
+
+    Attributes:
+        classifier (nn.Module): The classification model being trained.
+        alignment_model (nn.Module): The alignment model for optional preprocessing.
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        test_loader (DataLoader): DataLoader for test data.
+        proj_head (nn.Module): Projection head for contrastive learning tasks.
+    """
+
+    def __init__(self, classifier, alignment_model, dataloaders: DataLoaderSet):
+        # initialize the models used for the trainers
+        self.classifier: nn.Module = classifier
+        self.alignment_model: nn.Module = alignment_model
+
+        # 
         self.train_loader: DataLoader = dataloaders.train_loader
         self.test_loader: DataLoader= dataloaders.test_loader
         self.val_loader: DataLoader = dataloaders.val_loader
 
-        body_output_size = self.classifier.get_body_output_size()
-        self.proj_head = nn.Sequential(
+        # in case we need to do contrastive learning, we build out a projection head
+        body_output_size: int = self.classifier.get_body_output_size()
+        self.proj_head: nn.Module = nn.Sequential(
             nn.Linear(body_output_size, 128),
             nn.ReLU(),
             nn.Linear(128, 64)
         )
 
-    def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_unet=False):
+    def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_alignment=False):
         """
         Run one epoch of training or evaluation on the given dataset.
         
@@ -42,8 +69,9 @@ class ClassifierTrainer:
         - model: The neural network model
         - optimizer: The optimizer for the model (used only if train=True)
         - dataloader: DataLoader instance for the dataset
-        - mode: 'base_only', 'base_and_aux', or 'contrastive'
+        - target_only: Boolean, if True, only use the samples from the target dataset
         - train: Boolean, if True, run in training mode; if False, run in evaluation mode
+        - use_alignment: Boolean, if True, pass source samples through alignment model 
         
         Returns:
         - Average loss for the epoch
@@ -58,8 +86,8 @@ class ClassifierTrainer:
         else:
             self.classifier.eval()
 
-        self.unet.to(device)
-        self.unet.eval()
+        self.alignment_model.to(device)
+        self.alignment_model.eval()
         
         running_loss = 0.0
         correct = 0
@@ -86,8 +114,8 @@ class ClassifierTrainer:
                     correct += predicted.eq(labels).sum().item()
                 
                 else:
-                    if use_unet:
-                        source_samples = self.unet(source_samples)[-1]
+                    if use_alignment:
+                        source_samples = self.alignment_model(source_samples)[-1]
                         source_samples = source_samples.detach()
 
                     inputs = torch.cat((target_samples, source_samples), 0)
@@ -110,7 +138,92 @@ class ClassifierTrainer:
         
         return epoch_loss, epoch_accuracy
     
+    def _contrastive_run(self, dataloader, device, optimizer=None, train=True, temperature=0.1, use_alignment=False):
+        """
+        Runs a single epoch of supervised contrastive learning, either in training or evaluation mode.
+
+        Args:
+            dataloader (DataLoader): DataLoader providing batches of (target_samples, source_samples, labels).
+            device (torch.device): Device to perform computation on.
+            optimizer (torch.optim.Optimizer, optional): Optimizer for parameter updates (used if train=True).
+            train (bool, optional): If True, runs in training mode; otherwise, evaluation mode. Default is True.
+            temperature (float, optional): Temperature parameter for the contrastive loss. Default is 0.1.
+            use_alignment (bool, optional): If True, processes source samples with the alignment model before contrastive learning. Default is False.
+
+        Returns:
+            float: Average contrastive loss over the epoch.
+        """
+        criterion = fully_supervised_contrastive_loss
+        self.classifier.set_freeze_head(True)
+        self.classifier.set_freeze_body(False)
+        self.classifier.to(device)
+        self.proj_head.to(device)
+
+        if train:
+            self.classifier.train()
+            self.proj_head.train()
+        else:
+            self.classifier.eval()
+            self.proj_head.eval()
+        
+        running_loss = 0.0
+
+        self.alignment_model.to(device)
+        self.alignment_model.eval()
+        
+        for target_samples, source_samples, labels in dataloader:
+            labels = labels.long()
+            group_labels = torch.cat([
+                torch.zeros(len(target_samples)),
+                torch.ones(len(source_samples)),
+            ]).long()
+            group_labels = group_labels.reshape(1, -1)
+            target_samples, source_samples, labels = (
+                target_samples.to(device),
+                source_samples.to(device), 
+                labels.to(device)
+            )
+            
+            if use_alignment:
+                source_samples = self.alignment_model(source_samples)[-1]
+                
+            if train:
+                optimizer.zero_grad()
+            
+            with torch.set_grad_enabled(train):
+                inputs = torch.cat((target_samples, source_samples), 0)
+                features = self.classifier(inputs)[-1]
+                features = features.reshape(inputs.shape[0], -1)
+                projected = self.proj_head(features)
+                loss = criterion(projected, labels.repeat(2), group_labels, temperature=temperature)
+            
+            if train:
+                loss.backward()
+                optimizer.step()
+            
+            running_loss += loss.item()
+        
+        epoch_loss = running_loss / len(dataloader)
+
+        return epoch_loss
+    
     def _optimize_temperature(self, temp_range, device, classifier_filename, num_epochs=100):
+        """
+        Performs a grid search over the provided temperature range to find the optimal temperature for contrastive learning.
+
+        For each temperature, the classifier and projection head parameters are reset, the model is trained, and validation loss is tracked.
+        The best model (with lowest validation loss) and corresponding temperature are saved and returned.
+
+        Args:
+            temp_range (iterable): Range of temperature values to evaluate.
+            device (torch.device): Device to perform training on.
+            classifier_filename (str): Path to save the best model weights.
+            num_epochs (int, optional): Number of epochs to train for each temperature. Default is 100.
+
+        Returns:
+            tuple: (best_temp, best_val_loss) where best_temp is the optimal temperature and best_val_loss is the corresponding validation loss.
+        """
+
         best_temp = None
         best_val_loss = float('inf')
         
@@ -126,7 +239,7 @@ class ClassifierTrainer:
             )
                         
             for epoch in range(num_epochs):
-                train_loss = self._contrastive_run(
+                _ = self._contrastive_run(
                     optimizer=optimizer,
                     dataloader=self.train_loader,
                     device=device,
@@ -146,134 +259,34 @@ class ClassifierTrainer:
                     torch.save(self.classifier.state_dict(), classifier_filename)
         
         return best_temp, best_val_loss
-    
-    def _contrastive_run(self, dataloader, device, optimizer=None, train=True, temperature=0.1, use_unet=False):
+
+    def reset_parameters(self, module):
         """
-        Run one epoch of contrastive learning training or evaluation.
+        Recursively resets the parameters of all submodules within the given module that implement a 'reset_parameters' method.
+
+        Args:
+            module (nn.Module): The PyTorch module whose parameters should be reset.
         """
-        criterion = supervised_contrastive_loss
-        self.classifier.set_freeze_head(True)
-        self.classifier.set_freeze_body(False)
-        self.classifier.to(device)
-        self.proj_head.to(device)
 
-        if train:
-            self.classifier.train()
-            self.proj_head.train()
-        else:
-            self.classifier.eval()
-            self.proj_head.eval()
-        
-        running_loss = 0.0
-
-        self.unet.to(device)
-        self.unet.eval()
-        
-        for base_samples, aux_samples, labels in dataloader:
-            labels = labels.long()
-            group_labels = torch.cat([
-                torch.zeros(len(base_samples)),
-                torch.ones(len(aux_samples)),
-            ]).long()
-            group_labels = group_labels.reshape(1, -1)
-            base_samples, aux_samples, labels = (
-                base_samples.to(device),
-                aux_samples.to(device), 
-                labels.to(device)
-            )
-            
-            if use_unet:
-                aux_samples = self.unet(aux_samples)[-1]
-                
-            if train:
-                optimizer.zero_grad()
-            
-            with torch.set_grad_enabled(train):
-                inputs = torch.cat((base_samples, aux_samples), 0)
-                features = self.classifier(inputs)[-1]
-                features = features.reshape(inputs.shape[0], -1)
-                projected = self.proj_head(features)
-                loss = criterion(projected, labels.repeat(2), temperature=temperature)
-            
-            if train:
-                loss.backward()
-                optimizer.step()
-            
-            running_loss += loss.item()
-        
-        epoch_loss = running_loss / len(dataloader)
-        
-        return epoch_loss
-    
-    def reset_parameters(self, model):
-        for layer in model.children():
-            if hasattr(layer, 'reset_parameters'):
-                layer.reset_parameters()
-
-    def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_unet=False):
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
-                              nesterov=True, weight_decay=1e-2)
-
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer=optimizer,
-            T_0=20,
-            T_mult=1,
-            eta_min=1e-8
-        )
-
-        best_val_loss = 1e7
-
-        self.classifier.to(device)
-        self.unet.to(device)
-        self.unet.eval()
-
-        for epoch in range(num_epochs):
-            train_loss, train_acc = self._classification_run(
-                optimizer=optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                target_only=target_only,
-                train=True,
-                use_unet=use_unet
-            )
-
-            current_lr = optimizer.param_groups[0]['lr']
-            logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
-
-            scheduler.step() 
-
-            val_loss, val_acc = self._classification_run(
-                optimizer=None,
-                dataloader=self.val_loader,
-                device=device,
-                target_only=True,
-                train=False,
-                use_unet=use_unet
-            )
-
-            test_loss, test_acc = self._classification_run(
-                optimizer=None,
-                dataloader=self.test_loader,
-                device=device,
-                target_only=True,
-                train=False,
-                use_unet=use_unet
-            )
-
-            log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
-
-            if val_loss < best_val_loss:
-                log_message += " <- New Best"
-                best_val_loss = val_loss
-                torch.save(self.classifier.state_dict(), classifier_filename)
-
-            logger.info(log_message)
-        
-        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
-
-        return best_val_loss      
+        for m in module.modules():
+            if hasattr(m, 'reset_parameters'):
+                m.reset_parameters()
 
     def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=100, best_temp=None):
+        """
+        Performs contrastive pre-training with temperature optimization, then fine-tunes the classifier head for downstream classification.
+
+        Args:
+            device (torch.device): Device to perform training on.
+            filename (str): Path to save and load the best model weights.
+            temp_range (list, optional): List of temperature values to search for contrastive loss. Default is [0.05, 0.1, 0.15].
+            num_epochs (int, optional): Number of epochs for each training phase. Default is 100.
+            best_temp (float, optional): If provided, skips temperature search and uses this value.
+
+        Returns:
+            float: The best temperature value found (or provided) for contrastive training.
+        """
+        
         # Step 1: Optimize temperature and train body
         if best_temp == None:
             best_temp, best_val_loss = self._optimize_temperature(temp_range, device, filename, num_epochs)
@@ -298,8 +311,95 @@ class ClassifierTrainer:
         logger.info("Contrastive training and head training completed.")
         return best_temp
 
+    def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_alignment=False):
+        """
+        Trains the classifier using supervised learning, tracks best validation performance, and saves the best model checkpoint.
 
-    def evaluate_model(self, device, use_unet=False, test=False):
+        Args:
+            classifier_filename (str): Path to save the best model weights.
+            device (torch.device): Device to perform training on.
+            num_epochs (int, optional): Number of training epochs. Default is 100.
+            target_only (bool, optional): If True, only target samples are used for training. Default is False.
+            use_alignment (bool, optional): If True, processes inputs with the alignment model before classification. Default is False.
+
+        Returns:
+            float: Best validation loss achieved during training.
+        """
+
+        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
+                              nesterov=True, weight_decay=1e-2)
+
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer=optimizer,
+            T_0=20,
+            T_mult=1,
+            eta_min=1e-8
+        )
+
+        best_val_loss = 1e7
+
+        self.classifier.to(device)
+        self.alignment_model.to(device)
+        self.alignment_model.eval()
+
+        for epoch in range(num_epochs):
+            train_loss, train_acc = self._classification_run(
+                optimizer=optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                target_only=target_only,
+                train=True,
+                use_alignment=use_alignment
+            )
+
+            current_lr = optimizer.param_groups[0]['lr']
+            logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
+
+            scheduler.step() 
+
+            val_loss, val_acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_alignment=use_alignment
+            )
+
+            test_loss, test_acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_alignment=use_alignment
+            )
+
+            log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
+
+            if val_loss < best_val_loss:
+                log_message += " <- New Best"
+                best_val_loss = val_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
+
+            logger.info(log_message)
+        
+        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
+
+        return best_val_loss    
+
+    def evaluate_model(self, device, use_alignment=False, test=False):
+        """
+        Evaluates the model on the validation or test set.
+
+        Args:
+            device: torch.device to evaluate on.
+            use_alignment: Whether to use the alignment model for preprocessing.
+            test: If True, evaluates on test set; else on validation set.
+
+        Returns:
+            loss (float), acc (float): Average loss and accuracy.
+        """
         if test:
             loss, acc = self._classification_run(
                 optimizer=None,
@@ -307,8 +407,8 @@ class ClassifierTrainer:
                 device=device,
                 target_only=True,
                 train=False,
-                use_unet=use_unet
-            )                
+                use_alignment=use_alignment
+            )
         else:
             loss, acc = self._classification_run(
                 optimizer=None,
@@ -316,42 +416,82 @@ class ClassifierTrainer:
                 device=device,
                 target_only=True,
                 train=False,
-                use_unet=use_unet
+                use_alignment=use_alignment
             )
         return loss, acc
 
+
 class AlignmentTrainer:
-    def __init__(self, classifier, unet, dataloaders: DataLoaderSet, unet_loss):
+    """
+    AlignmentTrainer manages the training and evaluation routines for aligning an alignment models's feature representations with those of a classifier model.
+
+    This class is designed for advanced domain adaptation or feature alignment tasks, where the alignment model is trained to transform source samples such that their representations match those of the target samples at specified layers of a fixed classifier. It supports flexible loss selection for the alignment objective and robust training practices, including gradient clipping and NaN/Inf gradient checks.
+
+    Args:
+        classifier (nn.Module): The fixed classifier model whose feature representations serve as alignment targets.
+        alignment_model (nn.Module): The alignment model to be trained for feature alignment.
+        dataloaders (DataLoaderSet): Object containing train, validation, and test DataLoader instances.
+        alignment_loss (str): Specifies which loss function to use for alignment ('ebsw' or 'mmdfuse').
+
+    Attributes:
+        classifier (nn.Module): The classifier model used for feature extraction and alignment targets.
+        alignment_model (nn.Module): The alignment model being trained for alignment.
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        test_loader (DataLoader): DataLoader for test data.
+        criterion (callable): The loss function used for alignment.
+    """
+    def __init__(self, classifier, alignment_model, dataloaders: DataLoaderSet, alignment_loss):
         self.classifier = classifier
-        self.unet = unet
+        self.alignment_model = alignment_model
 
         self.train_loader: DataLoader = dataloaders.train_loader
         self.test_loader: DataLoader= dataloaders.test_loader
         self.val_loader: DataLoader = dataloaders.val_loader
 
-        self.criterion = ISEBSW if unet_loss == "ebsw" else mmdfuse
+        if alignment_loss == "ebsw":
+            self.criterion = ISEBSW
+        elif alignment_loss == "mmdfuse":
+            self.criterion = mmdfuse
+        else:
+            raise ValueError(f"Unknown alignment_loss: {alignment_loss}")
 
     def cascade_alignment_train_loop(self, layers, device, alignment_fname, epochs=100):
-        torch.save(self.unet.state_dict(), alignment_fname)
+        """
+        Trains the alignment model to align its feature representations with those of the classifier across specified layers using a cascade alignment strategy.
+
+        For each epoch, the alignment model is optimized to minimize the alignment loss between its outputs (after transforming source samples) and the classifier's outputs on target samples, across the given layers. The best UNet weights (based on validation loss) are saved and restored at the end. Includes gradient clipping and checks for NaN/Inf gradients for stability.
+
+        Args:
+            layers (list[int]): Indices of classifier layers to use for alignment loss computation.
+            device (torch.device): Device to perform training on.
+            alignment_fname (str): Path to save the best alignment model weights.
+            epochs (int, optional): Number of training epochs. Default is 100.
+
+        Returns:
+            float: The best validation loss achieved during training.
+        """
+        torch.save(self.alignment_model.state_dict(), alignment_fname)
         
         criterion = self.criterion
-        self.unet.to(device)
+        self.alignment_model.to(device)
         self.classifier.to(device)
 
         self.classifier.set_freeze_head(False)
         self.classifier.set_freeze_body(False)
         self.classifier.eval()
 
-        unet_optimizer = optim.Adam(self.unet.parameters(), lr=3e-4, weight_decay=1e-5)
-        unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=epochs, eta_min=1e-6)
+        alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-4, weight_decay=1e-5)
+        alignment_scheduler = CosineAnnealingLR(alignment_optimizer, T_max=epochs, eta_min=1e-6)
 
         best_val = float('inf')
         max_norm = 1
-        unet_nan = False
+        alignment_nan = False
 
         for epoch in range(epochs):
-            self.unet.train()
+            self.alignment_model.train()
             train_loss = 0
+
             for target_samples, source_samples, labels in self.train_loader:
                 labels = labels.long()
 
@@ -361,11 +501,11 @@ class AlignmentTrainer:
                     labels.to(device),
                 )
 
-                unet_optimizer.zero_grad()
+                alignment_optimizer.zero_grad()
 
-                unet_output = self.unet(source_samples)[-1]
+                alignment_output = self.alignment_model(source_samples)[-1]
                 target_reps = self.classifier(target_samples)
-                source_reps = self.classifier(unet_output)
+                source_reps = self.classifier(alignment_output)
 
                 loss = sum(
                     compute_layer_loss(target_reps, source_reps, labels, layer, criterion, device)
@@ -375,29 +515,34 @@ class AlignmentTrainer:
                 # loss += 0.05 * torch.nn.MSELoss()(target_samples, target_reps[-1])
 
                 loss.backward()
-                for name, param in self.unet.named_parameters():
+                for name, param in self.alignment_model.named_parameters():
                     if param.grad is not None:
                         if torch.isnan(param.grad).any():
                             print(f"NaN detected in gradient of {name}")
-                            unet_nan = True
+                            alignment_nan = True
                             break
                         if torch.isinf(param.grad).any():
                             print(f"Inf detected in gradient of {name}")
-                            unet_nan = True
+                            alignment_nan = True
                             break
 
-                torch.nn.utils.clip_grad_norm_(self.unet.parameters(), max_norm)
+                if alignment_nan:
+                    break
 
-                unet_optimizer.step()
+                torch.nn.utils.clip_grad_norm_(self.alignment_model.parameters(), max_norm)
 
-                train_loss += loss.item() / len(self.train_loader)
+                alignment_optimizer.step()
 
-            unet_scheduler.step()
-            if unet_nan:
-                unet_nan = False
+                train_loss += loss.item()
+            
+            train_loss /= len(self.train_loader)
+
+            alignment_scheduler.step()
+            if alignment_nan:
+                alignment_nan = False
                 break
 
-            self.unet.eval()
+            self.alignment_model.eval()
             val_loss = 0
             for target_samples, source_samples, labels in self.val_loader:
                 labels = labels.long()
@@ -409,16 +554,18 @@ class AlignmentTrainer:
                 )
 
                 with torch.no_grad():
-                    unet_output = self.unet(source_samples)[-1]
+                    alignment_output = self.alignment_model(source_samples)[-1]
                     target_reps = self.classifier(target_samples)
-                    source_reps = self.classifier(unet_output)
+                    source_reps = self.classifier(alignment_output)
 
                     loss = sum(
                         compute_layer_loss(target_reps, source_reps, labels, layer, criterion, device)
                         for layer in layers
                     )
 
-                val_loss += loss.item() / len(self.val_loader)
+                val_loss += loss.item()
+            
+            val_loss /= len(self.val_loader)
 
             gc.collect()
             torch.cuda.empty_cache()
@@ -427,38 +574,59 @@ class AlignmentTrainer:
             if val_loss < best_val:
                 log_message += " <- New Best"
                 best_val = val_loss
-                torch.save(self.unet.state_dict(), alignment_fname)
+                torch.save(self.alignment_model.state_dict(), alignment_fname)
 
             logger.info(log_message)
         
-        self.unet.load_state_dict(torch.load(alignment_fname, weights_only=True)) 
+        self.alignment_model.load_state_dict(torch.load(alignment_fname, weights_only=True)) 
 
         return best_val 
 
 class FullTrainer:
-    def __init__(self, classifier, unet, classifier_dataloaders, unet_dataloaders, file_folder, unet_loss, classifier_name):
-        self.classifier = classifier
-        self.unet = unet
-        self.unet_loss = unet_loss
-        self.classifier_dataloaders = classifier_dataloaders
-        self.unet_dataloaders = unet_dataloaders
-        self.file_folder = file_folder
-        self.classifier_name = classifier_name
+    def __init__(
+        self,
+        classifier: nn.Module,
+        alignment_model: nn.Module,
+        classifier_dataloaders: DataLoaderSet,
+        alignment_dataloaders: DataLoaderSet,
+        file_folder: str,
+        alignment_loss: str,
+        classifier_name: str
+    ):
+        """
+        Initializes the FullTrainer, which orchestrates classifier and alignment model training.
 
-        self.classifier_trainer = ClassifierTrainer(
+        Args:
+            classifier (nn.Module): The classification model.
+            alignment_model (nn.Module): The model to be aligned (e.g., UNet or other).
+            classifier_dataloaders (DataLoaderSet): Dataloaders for classifier training/validation/testing.
+            alignment_dataloaders (DataLoaderSet): Dataloaders for alignment training/validation/testing.
+            file_folder (str): Path for saving models and logs.
+            alignment_loss (str): Loss function for alignment model ('ebsw' or 'mmdfuse').
+            classifier_name (str): Name identifier for the classifier.
+        """
+        self.classifier: nn.Module = classifier
+        self.alignment_model: nn.Module = alignment_model
+        self.alignment_loss: str = alignment_loss
+        self.classifier_dataloaders: DataLoaderSet = classifier_dataloaders
+        self.alignment_dataloaders: DataLoaderSet = alignment_dataloaders
+        self.file_folder: str = file_folder
+        self.classifier_name: str = classifier_name
+
+        self.classifier_trainer: ClassifierTrainer = ClassifierTrainer(
             classifier=self.classifier,
-            unet=self.unet,
+            alignment_model=self.alignment_model,  
             dataloaders=self.classifier_dataloaders,
-        )  
-
-        self.alignment_trainer = AlignmentTrainer(
-            classifier=self.classifier,
-            unet=self.unet,
-            dataloaders=self.unet_dataloaders,
-            unet_loss=unet_loss
         )
 
-    def cascading_train_loop(self, classifier_fname, unet_fname, examples_fname, device, num_epochs=100):
+        self.alignment_trainer: ClassifierTrainer = AlignmentTrainer(
+            classifier=self.classifier,
+            alignment_model=self.alignment_model,
+            dataloaders=self.alignment_dataloaders,
+            alignment_loss=self.alignment_loss
+        )
+
+    def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
 
@@ -468,37 +636,81 @@ class FullTrainer:
         best_layer_test_loss = 1e7
         best_layer_test_acc = 0
         
-        best_layer = 1000
+        best_layer = None
 
         inter_layer_distances = []
         intra_layer_distances = []
         classifier_val_accs = []
         classifier_test_accs = []
 
-        ebsw_plotter = EBSW_Plotter(
-            dataloaders=self.unet_dataloaders,
+        ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
+            dataloaders=self.alignment_dataloaders,
             batch_size=self.classifier_dataloaders.train_loader.batch_size
         )
 
-        for i in range(1, num_layers+1):
-            layer_set = layers[-i:]
-            logger.info(f"COVERING LAYERS: {layer_set}\n")
-            start_layer = layer_set[0] # get the first layer we use for the set
-            classifier_layer_fname = classifier_fname[:-3] + f"-{start_layer}.pt"
-            unet_layer_fname = unet_fname[:-3] + f"-{start_layer}.pt"
-            unet_layer_examples_fname = examples_fname[:-4] + f"-{start_layer}.pdf"
+        # calculate divergence performance before any alignment
+        if self.alignment_loss == "ebsw":
+            inter = ebsw_plotter.run_isebsw(
+                model=self.classifier,
+                dataloader=self.alignment_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                target_only=True,
+                alignment_model=None,
+                num_projections=256
+            )
 
-            unet_val = self.alignment_trainer.cascade_alignment_train_loop(
+            intra = ebsw_plotter.run_isebsw(
+                model=self.classifier,
+                dataloader=self.alignment_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                target_only=False,
+                alignment_model=None,
+                num_projections=256
+            )
+
+        else:
+            inter = ebsw_plotter.run_mmdfuse(
+                model=self.classifier,
+                dataloader=self.alignment_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                target_only=True,
+                alignment_model=None,
+            )
+
+            intra = ebsw_plotter.run_mmdfuse(
+                model=self.classifier,
+                dataloader=self.alignment_dataloaders.val_loader,
+                layers=[j for j in range(num_layers-1)],
+                device=device,
+                target_only=False,
+                alignment_model=None,
+            )
+
+        inter_layer_distances.append(inter)
+        intra_layer_distances.append(intra)
+
+        for i in range(1, num_layers+1):
+            layer_set: List[int] = layers[-i:]
+            logger.info(f"COVERING LAYERS: {layer_set}\n")
+            start_layer: int = layer_set[0]
+            classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"
+            alignment_layer_fname: str = path.splitext(alignment_fname)[0] + f"-{start_layer}.pt"
+            alignment_layer_examples_fname: str = path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
+
+            alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
                 layers=layer_set,
                 device=device,
-                alignment_fname=unet_layer_fname,
+                alignment_fname=alignment_layer_fname,
                 epochs=num_epochs
             )
 
             plot_examples(
                 dataset=self.classifier_dataloaders.val_loader.dataset,
-                unet_model=self.unet,
-                filename=unet_layer_examples_fname,
+                alignment_model=self.alignment_model,
+                filename=alignment_layer_examples_fname,
                 device=device
             )
 
@@ -506,47 +718,47 @@ class FullTrainer:
                 classifier_filename=classifier_layer_fname,
                 device=device,
                 num_epochs=num_epochs,
-                use_unet=True,
+                use_alignment=True,
             )
 
-            if self.unet_loss == "ebsw":
+            if self.alignment_loss == "ebsw":
                 inter = ebsw_plotter.run_isebsw(
                     model=self.classifier,
-                    dataloader=self.unet_dataloaders.val_loader,
+                    dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
                     device=device,
-                    base_only=True,
-                    unet_model=self.unet,
+                    target_only=True,
+                    alignment_model=self.alignment_model,
                     num_projections=256
                 )
 
                 intra = ebsw_plotter.run_isebsw(
                     model=self.classifier,
-                    dataloader=self.unet_dataloaders.val_loader,
+                    dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
                     device=device,
-                    base_only=False,
-                    unet_model=self.unet,
+                    target_only=False,
+                    alignment_model=self.alignment_model,
                     num_projections=256
                 )
 
             else:
                 inter = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
-                    dataloader=self.unet_dataloaders.val_loader,
+                    dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
                     device=device,
-                    base_only=True,
-                    unet_model=self.unet,
+                    target_only=True,
+                    alignment_model=self.alignment_model,
                 )
 
                 intra = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
-                    dataloader=self.unet_dataloaders.val_loader,
+                    dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
                     device=device,
-                    base_only=False,
-                    unet_model=self.unet,
+                    target_only=False,
+                    alignment_model=self.alignment_model,
                 )
 
             inter_layer_distances.append(inter)
@@ -563,31 +775,31 @@ class FullTrainer:
             classifier_test_accs.append(classifier_test_acc)
 
             if classifier_val_acc > best_layer_val_acc:
-                best_layer_val_acc = classifier_val_acc
-                best_layer_val_loss = classifier_val_loss
+                best_layer_val_acc: float = classifier_val_acc
+                best_layer_val_loss: float = classifier_val_loss
 
-                best_layer_test_acc = classifier_test_acc
-                best_layer_test_loss = classifier_test_loss
+                best_layer_test_acc: float = classifier_test_acc
+                best_layer_test_loss: float = classifier_test_loss
                 
-                best_layer = start_layer
+                best_layer: int = start_layer
 
         logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
-        classifier_best_fname = classifier_fname[:-3] + f"-{best_layer}.pt"
-        unet_best_fname = unet_fname[:-3] + f"-{best_layer}.pt"
+        classifier_best_fname: str = classifier_fname[:-3] + f"-{best_layer}.pt"
+        alignment_best_fname: str = alignment_fname[:-3] + f"-{best_layer}.pt"
 
         self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
-        self.unet.load_state_dict(torch.load(unet_best_fname, weights_only=True))
+        self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
 
         inter_layer_distances = np.array(inter_layer_distances)
         intra_layer_distances = np.array(intra_layer_distances)
         classifier_val_accs = np.array(classifier_val_accs)
 
-        model_name = self.classifier_name
-        inter_fname = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
-        intra_fname = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
-        val_fname = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
-        test_fname = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname = path.join(self.file_folder, f"{model_name}-divergence_plots")
+        model_name: str = self.classifier_name
+        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
+        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
+        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
+        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
+        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots")
 
         np.save(val_fname, classifier_val_accs)
         np.save(test_fname, classifier_test_accs)
@@ -601,405 +813,58 @@ class FullTrainer:
             fname=div_plots_fname
         )
 
-class Trainer:
-    """
-    The trainer is an all inclusive model trainer for this work. It's quite long, but here are all of the functions with their use case:
-    * classification_train_loop - trains the classifier provided on the the dataset provided using CE for improving classification accuracy
-    * evaluate_model - inferences the model on the validation set to get accuracy
-    * unet_train_loop - the train loop to train the unet architecture to get source closer to target
-    * unet_classifier_loop - the full loop to go from unet train to classifier retrain
-    """
-    def __init__(self, classifier, dataloaders: DataLoaderSet, unet=None, 
-                 contrastive=False, classifier_load_path=None, unet_load_path=None):
-        
-        if unet_load_path and not classifier_load_path:
-            logger.warning("UNET weights were given, but no classifier weights were given")
-
+class PreloaderTrainer:
+    def __init__(self, autoencoder, alignment_model, classifier, cls_dataloaders: DataLoaderSet, align_dataloaders: DataLoaderSet):
+        self.autoencoder = autoencoder
         self.classifier = classifier
-        if classifier_load_path:
-            self.classifier.load_state_dict(torch.load(classifier_load_path, weights_only=True))
+        self.alignment_model = alignment_model
 
-        self.train_loader: DataLoader = dataloaders.train_loader
-        self.test_loader: DataLoader= dataloaders.test_loader
-        self.val_loader: DataLoader = dataloaders.val_loader
+        self.train_loader: DataLoader = cls_dataloaders.train_loader
+        self.test_loader: DataLoader = cls_dataloaders.test_loader
+        self.val_loader: DataLoader = cls_dataloaders.val_loader
 
-        if contrastive:
-            body_output_size = self.classifier.get_body_output_size()
-            self.proj_head = nn.Sequential(
-                nn.Linear(body_output_size, 128),
-                nn.ReLU(),
-                nn.Linear(128, 64)
-            )
-        else:
-            self.proj_head = None
+        self.align_train_loader: DataLoader = align_dataloaders.train_loader
+        self.align_val_loader: DataLoader = align_dataloaders.val_loader
+        self.align_test_loader: DataLoader = align_dataloaders.test_loader
 
-        self.unet = unet
-        if unet_load_path:
-            self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
+        self.alignment_model.apply(self.init_weights)
 
-    def classification_train_loop(self, filename, device, mode, num_epochs=100):
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
-                              nesterov=True, weight_decay=1e-2)
+    def init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
-        # def lr_lambda(epoch):
-        #     if epoch < 30:  # Linear warmup for first 30 epochs
-        #         return (epoch * (1e-1 - 1e-8) / 30) + 1e-8
-        #     else:  # Cosine annealing for remaining epochs
-        #         return 1e-1 * 0.5 * (1 + np.cos(np.pi * (epoch - 30) / (num_epochs - 30)))
-
-        # scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer=optimizer,
-            T_0=20,
-            T_mult=1,
-            eta_min=1e-8
-        )
-
-        best_val = 1e7
-
-        for epoch in range(num_epochs):
-            train_loss, train_acc = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = optimizer,
-                dataloader = self.train_loader,
-                mode = mode,
-                device = device
-            )
-
-            current_lr = optimizer.param_groups[0]['lr']
-            logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
-
-            scheduler.step() 
-
-            val_loss, val_acc = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = optimizer,
-                dataloader = self.val_loader,
-                mode = mode,
-                device = device,
-                train = False
-            )
-
-            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {train_acc*100:.2f} {val_loss:.4f} {val_acc*100:.2f}"
-
-            if val_loss < best_val:
-                log_message += " <- New Best"
-                best_val = val_loss
-                torch.save(self.classifier.state_dict(), filename)
-
-            logger.info(log_message)
-
-        self.classifier.load_state_dict(torch.load(filename, weights_only=True))
-
-    def evaluate_model(self, device):
-        _, val_acc = self._classification_run(
-            model=self.classifier,
-            unet_model=self.unet,
-            optimizer=None,
-            dataloader=self.val_loader,
-            device=device,
-            mode="base_only",
-            train=False,
-        )
-
-        return val_acc
-    
-    def unet_train_loop(self, filename, device, num_epochs=20):
-        optimizer = optim.Adam(
-            self.unet.parameters(),
-            lr = 3e-4,
-            weight_decay = 1e-5
-        )
-        unet_val_loss = 1e7
-
-        for epoch in range(num_epochs):
-            train_loss = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-
-            val_loss = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=optimizer,
-                dataloader=self.val_loader,
-                device=device,
-                train=False
-            )
-
-            _, classifier_val_acc = self._classification_run(
-                model=self.classifier,
-                optimizer=None,
-                dataloader=self.val_loader,
-                device=device,
-                train=False,
-                unet_model=self.unet
-            )
-
-            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {val_loss:.4f}"
-
-            if val_loss < unet_val_loss:
-                log_message += " <- New Best"
-                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
-                unet_val_loss = val_loss
-                torch.save(self.unet.state_dict(), filename)
-
-            logger.info(log_message)
-
-        self.unet.load_state_dict(torch.load(filename, weights_only=True))
-
-    def unet_classifier_train_loop(self, classifier_filename, unet_filename, device, batch_size, unet_epochs=100, classifier_epochs=50):
-        unet_optimizer = optim.Adam(
-            self.unet.parameters(),
-            lr = 3e-3,
-            weight_decay = 1e-5
-        )
-
-        unet_scheduler = CosineAnnealingLR(unet_optimizer, T_max=unet_epochs, eta_min=1e-6)
-
-        best_unet_val_loss = float('inf')
-        best_classifier_val_loss = float('inf')
-
-        # Phase 1: U-Net Training
-        logger.info("Warm Starting UNET Model")
-        for ws_epoch in range(20):
-            _ = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-
-        logger.info("Starting UNET Model Training")
-        for epoch in range(unet_epochs):
-            train_loss = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-
-            unet_scheduler.step()
-
-            # Validate U-Net
-            with torch.no_grad():
-                val_loss = self._unet_run(
-                    unet_model=self.unet,
-                    classifier=self.classifier,
-                    optimizer=None,
-                    dataloader=self.val_loader,
-                    device=device,
-                    train=False
-                )
-
-            log_message = f"U-Net Epoch {epoch+1}/{unet_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
-
-            if val_loss < best_unet_val_loss:
-                log_message += " <- New Best"
-                best_unet_val_loss = val_loss
-                torch.save(self.unet.state_dict(), unet_filename)
-
-            logger.info(log_message)
-
-        # Load best U-Net model
-        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
-
-        train_ds = self._adjust_aux_dataset(
-            dataloader=self.train_loader,
-            classifier=self.classifier,
-            unet=self.unet,
-            batch_size=batch_size,
-            device=device
-        )
-
-        val_ds = self._adjust_aux_dataset(
-            dataloader=self.val_loader,
-            classifier=self.classifier,
-            unet=self.unet,
-            batch_size=batch_size,
-            device=device
-        )
-
-        self.train_loader = torch.utils.data.DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
-        )
-
-        self.val_loader = torch.utils.data.DataLoader(
-            val_ds, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True
-        )
-
-        classifier_optimizer = optim.Adam(
-            self.classifier.parameters(),
-            lr = 1e-4,
-            weight_decay = 1e-5
-        )
-
-        classifier_scheduler = CosineAnnealingLR(classifier_optimizer, T_max=classifier_epochs, eta_min=1e-8)
-
-        # reset head of the model
-        self.classifier.reset_head_parameters()
-
-        # Phase 2: Classifier Head Fine-tuning
-        logger.info("Starting Classifier Head Fine-tuning")
-        for epoch in range(classifier_epochs):
-            self.classifier.set_freeze_head(False)
-            self.classifier.set_freeze_body(False)
-
-            train_loss, _ = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = classifier_optimizer,
-                dataloader = self.train_loader,
-                mode = "sa",
-                device = device,
-                train=True
-            )
-
-            classifier_scheduler.step()
-
-            classifier_val_loss, classifier_val_acc = self._classification_run(
-                model=self.classifier,
-                unet_model=self.unet,
-                optimizer=None,
-                dataloader=self.val_loader,
-                device=device,
-                mode="base_only",
-                train=False,
-            )
-
-            log_message = f"Classifier Epoch {epoch+1}/{classifier_epochs}: Train Loss: {train_loss:.4f}, Val Loss: {classifier_val_loss:.4f}, Val Acc: {classifier_val_acc*100:.2f}%"
-
-            if classifier_val_loss < best_classifier_val_loss:
-                log_message += " <- New Best"
-                best_classifier_val_loss = classifier_val_loss
-                torch.save(self.classifier.state_dict(), classifier_filename)
-
-            logger.info(log_message)
-
-        # Load best classifier model
-        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
-
-    def unet_contrastive_train_loop(self, classifier_filename, unet_filename, device, num_epochs=100, best_temp=0.05):
-        unet_optimizer = optim.Adam(
-            self.unet.parameters(),
-            lr = 3e-4,
-            weight_decay = 1e-5
-        )
-
-        body_optimizer = optim.Adam(
-            list(self.classifier.parameters()) + list(self.proj_head.parameters()),
-            lr=0.001, 
-            weight_decay=1e-5
-        )
-
-        best_val_loss = 1e7
-
-        for ws_epoch in range(10):
-            # train unet once
-            _ = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-
-        for epoch in range(num_epochs):
-            # train unet once
-            _ = self._unet_run(
-                unet_model=self.unet,
-                classifier=self.classifier,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                train=True
-            )
-            
-            # train contrastive body with unet
-            contrast_train_loss = self._contrastive_run(
-                model=self.classifier,
-                unet_model=self.unet,
-                proj_head=self.proj_head,
-                optimizer=body_optimizer,
-                dataloader=self.train_loader,
-                device=device,
-                temperature=best_temp
-            )
-
-            self.classifier.set_freeze_head(False)
-            self.classifier.set_freeze_body(True)
-            
-            # Train the head
-            self.classification_train_loop(classifier_filename, device, mode='mixed', num_epochs=100)
-
-            self.classifier.set_freeze_head(False)
-            self.classifier.set_freeze_body(False)
-
-            classifier_val_loss, classifier_val_acc = self._classification_run(
-                model=self.classifier,
-                unet_model=self.unet,
-                optimizer=None,
-                dataloader=self.val_loader,
-                device=device,
-                mode="base_only",
-                train=False,
-            )
-
-            log_message = f"\tEpoch {epoch+1}: {classifier_val_loss:.4f} {classifier_val_acc*100:.2f}"
-
-            if classifier_val_loss < best_val_loss:
-                log_message += " <- New Best"
-                log_message += f"\n\tClassifier Acc: {round(classifier_val_acc*100), 2}\n"
-                best_val_loss = classifier_val_loss
-                torch.save(self.classifier.state_dict(), classifier_filename)
-                torch.save(self.unet.state_dict(), unet_filename)
-
-            logger.info(log_message)
-
-        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
-        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
-    
-    def _unet_run(self, unet_model, classifier, optimizer, dataloader, device, train=True):
+    def _alignment_run(self, autoencoder, alignment_model, optimizer, dataloader, device, train=True):
         criterion = ISEBSW
-        unet_model.to(device)
-        classifier.to(device)
+        alignment_model.to(device)
+        autoencoder.to(device)
 
         if train:
-            unet_model.train()
+            alignment_model.train()
         else:
-            unet_model.eval()
+            alignment_model.eval()
 
-        classifier.eval()
-
+        autoencoder.eval()
         running_loss = 0.0
 
-        for base_samples, aux_samples, _ in dataloader: 
-            base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
+        for target_samples, source_samples, _ in dataloader: 
+            target_samples, source_samples = target_samples.to(device), source_samples.to(device)
+
             if train:
                 optimizer.zero_grad()
 
             with torch.set_grad_enabled(train):
-                unet_output = unet_model(aux_samples)[-1]
-                base_reps = classifier(base_samples)
-                aux_reps = classifier(unet_output)
-            
+                alignment_output = alignment_model(source_samples)[-1]
+                target_reps = autoencoder(target_samples)
+                source_reps = autoencoder(alignment_output)
+
             loss = 0
-            for i in range(len(base_reps)):
-                base_reshaped = base_reps[i].view(base_reps[i].size(0), -1)
-                aux_reshaped = aux_reps[i].view(aux_reps[i].size(0), -1)
-                loss += criterion(base_reshaped, aux_reshaped, L=256, device=device)
+
+            for i in range(len(target_reps)//2):
+                target_reshaped = target_reps[i].view(target_reps[i].size(0), -1)
+                source_reshaped = source_reps[i].view(source_reps[i].size(0), -1)
+                loss += criterion(target_reshaped, source_reshaped, L=256, device=device)
 
             if train:
                 loss.backward()
@@ -1010,35 +875,8 @@ class Trainer:
         epoch_loss = running_loss / len(dataloader)
 
         return epoch_loss
-
-
-    def contrastive_train_loop(self, device, filename, temp_range=[0.05, 0.1, 0.15], num_epochs=100, best_temp=None):
-        # Step 1: Optimize temperature and train body
-        if best_temp == None:
-            best_temp, best_val_loss = self._optimize_temperature(temp_range, num_epochs, device, filename)
-        
-            logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
-        
-        # Load the best model
-        self.classifier.load_state_dict(torch.load(filename, weights_only=True))
-        
-        # Step 2: Freeze body and train head
-        self.classifier.set_freeze_head(False)
-        self.classifier.set_freeze_body(True)
-        
-        # Train the head
-        head_filename = filename.replace('body', 'full')
-        self.classification_train_loop(head_filename, device, mode='mixed', num_epochs=100)
-        
-        # Optionally, unfreeze everything for potential fine-tuning
-        self.classifier.set_freeze_head(False)
-        self.classifier.set_freeze_body(False)
-
-        logger.info("Contrastive training and head training completed.")
-        return best_temp
-
-
-    def _classification_run(self, model, optimizer, dataloader, device, mode, train=True, unet_model=None):
+    
+    def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_alignment=False):
         """
         Run one epoch of training or evaluation on the given dataset.
         
@@ -1046,8 +884,9 @@ class Trainer:
         - model: The neural network model
         - optimizer: The optimizer for the model (used only if train=True)
         - dataloader: DataLoader instance for the dataset
-        - mode: 'base_only', 'base_and_aux', or 'contrastive'
+        - target_only: Boolean, if True, only use the samples from the target dataset
         - train: Boolean, if True, run in training mode; if False, run in evaluation mode
+        - use_alignment: Boolean, if True, pass source samples through alignment model 
         
         Returns:
         - Average loss for the epoch
@@ -1055,31 +894,34 @@ class Trainer:
         """
 
         criterion = nn.CrossEntropyLoss()
-        model.to(device)
+        self.classifier.to(device)
 
         if train:
-            model.train()
+            self.classifier.train()
         else:
-            model.eval()
+            self.classifier.eval()
 
-        if unet_model:
-            unet_model.to(device)
-            unet_model.eval()
+        self.alignment_model.to(device)
+        self.alignment_model.eval()
         
         running_loss = 0.0
         correct = 0
         total = 0
         
-        for base_samples, aux_samples, labels in dataloader:
+        for target_samples, source_samples, labels in dataloader:
             labels = labels.long()
-            base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
+            target_samples, source_samples, labels = (
+                target_samples.to(device), 
+                source_samples.to(device), 
+                labels.to(device)
+            )
             
             if train:
                 optimizer.zero_grad()
             
             with torch.set_grad_enabled(train):
-                if mode == 'base_only' and unet_model == None:
-                    outputs = model(base_samples)[-1]
+                if target_only:
+                    outputs = self.classifier(target_samples)[-1]
                     loss = criterion(outputs, labels)
                     
                     _, predicted = outputs.max(1)
@@ -1087,17 +929,13 @@ class Trainer:
                     correct += predicted.eq(labels).sum().item()
                 
                 else:
-                    if unet_model != None:
-                        aux_samples = unet_model(aux_samples)[-1]
+                    if use_alignment:
+                        source_samples = self.alignment_model(source_samples)[-1]
+                        source_samples = source_samples.detach()
 
-                    # logger.info(base_samples.shape)
-                    # logger.info(aux_samples.shape)
-                    # print(base_samples.shape)
-                    # print(aux_samples.shape)
+                    inputs = torch.cat((target_samples, source_samples), 0)
 
-                    inputs = torch.cat((base_samples, aux_samples), 0)
-
-                    outputs = model(inputs)[-1]
+                    outputs = self.classifier(inputs)[-1]
                     loss = criterion(outputs, labels.repeat(2))
                     
                     _, predicted = outputs.max(1)
@@ -1115,224 +953,31 @@ class Trainer:
         
         return epoch_loss, epoch_accuracy
 
-    def _optimize_temperature(self, temp_range, num_epochs, device, filename):
-        best_temp = None
-        best_val_loss = float('inf')
-        
-        for temp in temp_range:
-            logger.info(f"\tStarting temp: {temp}")
-            self.classifier.reset_parameters()
-            self.reset_parameters(self.proj_head)
-            
-            optimizer = optim.Adam(
-                list(self.classifier.parameters()) + list(self.proj_head.parameters()),
-                lr=0.001, 
-                weight_decay=1e-5
-            )
-                        
-            for epoch in range(num_epochs):
-                train_loss = self._contrastive_run(
-                    model=self.classifier,
-                    proj_head=self.proj_head,
-                    optimizer=optimizer,
-                    dataloader=self.train_loader,
-                    device=device,
-                    temperature=temp
-                )
-                
-                val_loss = self._contrastive_run(
-                    model=self.classifier,
-                    proj_head=self.proj_head,
-                    dataloader=self.val_loader,
-                    device=device,
-                    train=False,
-                    temperature=temp
-                )
-                
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    best_temp = temp
-                    torch.save(self.classifier.state_dict(), filename)
-        
-        return best_temp, best_val_loss
+    def alignment_preloader_train_loop(self, ae_filename, alignment_filename, device, num_epochs=100, train_both=True):
+        if self.autoencoder is None:
+            logger.error("No autoencoder found in trainer")
+            raise ValueError("No autoencoder found in trainer")
 
-
-    def _contrastive_run(self, model: DynamicCNN, proj_head, dataloader, device, optimizer=None, train=True, temperature=0.1, unet_model=None):
-        """
-        Run one epoch of contrastive learning training or evaluation.
-        """
-        criterion = supervised_contrastive_loss
-        model.set_freeze_head(True)
-        model.set_freeze_body(False)
-        model.to(device)
-        proj_head.to(device)
-
-        if train:
-            model.train()
-            proj_head.train()
-        else:
-            model.eval()
-            proj_head.eval()
-        
-        running_loss = 0.0
-
-        if unet_model:
-            unet_model.to(device)
-            unet_model.eval()
-        
-        for base_samples, aux_samples, labels in dataloader:
-            labels = labels.long()
-            group_labels = torch.cat([
-                torch.zeros(len(base_samples)),
-                torch.ones(len(aux_samples)),
-            ]).long()
-            group_labels = group_labels.reshape(1, -1)
-            base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
-            
-            if unet_model!=None:
-                aux_samples = unet_model(aux_samples)[-1]
-            if train:
-                optimizer.zero_grad()
-            
-            with torch.set_grad_enabled(train):
-                inputs = torch.cat((base_samples, aux_samples), 0)
-                features = model(inputs)[-1]
-                features = features.reshape(inputs.shape[0], -1)
-                projected = proj_head(features)
-                loss = criterion(projected, labels.repeat(2), temperature=temperature)
-            
-            if train:
-                loss.backward()
-                optimizer.step()
-            
-            running_loss += loss.item()
-        
-        epoch_loss = running_loss / len(dataloader)
-        
-        return epoch_loss
-    
-    def _adjust_aux_dataset(self, dataloader, classifier, unet, device, batch_size):
-        classifier.to(device)
-        unet.to(device)
-
-        classifier.eval()
-        unet.eval()
-
-        dataset: CombinedDataset = dataloader.dataset
-        aux_dataset = dataset.aux_dataset
-
-        init_len = len(aux_dataset)
-
-        aux_dataloader = DataLoader(
-            aux_dataset,
-            batch_size=batch_size,
-            shuffle=False
-        )
-
-        indices_to_keep = []
-
-        for batch_idx, (aux_samples, labels) in enumerate(aux_dataloader):
-            labels = labels.long()
-            aux_samples = aux_samples.to(device)
-            labels = labels.to(device)
-
-            with torch.no_grad():
-                outputs = classifier(aux_samples)[-1]
-                _, predicted = torch.max(outputs, 1)
-
-                # Compare predictions with labels
-                correctly_classified = (predicted == labels)
-                
-                # Get the indices of correctly classified samples
-                correct_indices = correctly_classified.nonzero().squeeze().cpu().numpy()
-                
-                # Adjust indices to global dataset indices
-                global_indices = correct_indices + batch_idx * batch_size
-                
-                indices_to_keep.extend(global_indices.tolist())
-
-        # Create a new IndexedDataset with only the correctly classified samples
-        new_aux_dataset = IndexedDataset(aux_dataset.base_dataset, [aux_dataset.indices[i] for i in indices_to_keep])
-
-        final_len = len(new_aux_dataset)
-
-        # Update the CombinedDataset
-        dataset.aux_dataset = new_aux_dataset
-
-        removed_len = init_len - final_len
-
-        logger.info(f"Removed {removed_len} ({round(removed_len/init_len*100, 2)}%) samples from the auxiliary dataset.")
-
-        return dataset
-                
-
-    def reset_parameters(self, model):
-        for layer in model.children():
-            if hasattr(layer, 'reset_parameters'):
-                layer.reset_parameters()
-
-class PreloaderTrainer:
-    def __init__(self, autoencoder, dataloaders: DataLoaderSet, unet, classifier,
-                 ae_load_path=None, unet_load_path=None, classifier_load_path=None):
-        
-        if unet_load_path and not ae_load_path:
-            logger.warning("UNET weights were given, but no classifier weights were given")
-
-        self.autoencoder = autoencoder
-        if ae_load_path:
-            self.autoencoder.load_state_dict(torch.load(ae_load_path, weights_only=True))
-
-        self.classifier = classifier
-        if classifier_load_path:
-            self.classifier.load_state_dict(torch.load(classifier_load_path, weights_only=True))
-
-        self.train_loader: DataLoader = dataloaders.train_loader
-        self.test_loader: DataLoader= dataloaders.test_loader
-        self.val_loader: DataLoader = dataloaders.val_loader
-
-        self.unet = unet
-        self.unet.apply(self.init_weights)
-        
-        if unet_load_path:
-            self.unet.load_state_dict(torch.load(unet_load_path, weights_only=True))
-
-    def init_weights(self, m):
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
-            nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
-                
-
-    def unet_preloader_train_loop(self, ae_filename, unet_filename, device, num_epochs=100, train_both=True):
-        if self.autoencoder == None:
-            logger.error("No classifier found in trainer")
-            raise ValueError("No classifier found in trainer")
-        
         if train_both:
-            if self.unet == None:
-                logger.error("No UNET found in trainer")
-                raise ValueError("No UNET found in trainer")
+            if self.alignment_model is None:
+                logger.error("No alignment model found in trainer")
+                raise ValueError("No alignment model found in trainer")
             
-            best_ae_val = 1e7
-            best_unet_val = 1e7
+            best_ae_val = float('inf')
             ae_optimizer = optim.Adam(self.autoencoder.parameters(), lr=1e-3, weight_decay=1e-5)
 
-            self.unet.to(device)
+            self.alignment_model.to(device)
             self.autoencoder.to(device)
 
             for epoch in range(num_epochs):
                 self.autoencoder.train()
-                for base, aux, _ in self.train_loader:
+                for target, source, _ in self.train_loader:
                     ae_optimizer.zero_grad()
-                    base = base.to(device)
-                    aux = aux.to(device)
-
-                    combined_input = torch.cat((base, aux), dim=0)
-
+                    target = target.to(device)
+                    source = source.to(device)
+                    combined_input = torch.cat((target, source), dim=0)
                     output = self.autoencoder(combined_input)[-1]
-
                     loss = nn.MSELoss()(output, combined_input)
-
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), 1)
                     ae_optimizer.step()
@@ -1340,87 +985,82 @@ class PreloaderTrainer:
                 self.autoencoder.eval()
                 total_loss = 0
                 with torch.no_grad():
-                    for base, aux, _ in self.val_loader:
-                        base = base.to(device)
-                        aux = aux.to(device)
-
-                        combined_input = torch.cat((base, aux), dim=0)
-
+                    for target, source, _ in self.val_loader:
+                        target = target.to(device)
+                        source = source.to(device)
+                        combined_input = torch.cat((target, source), dim=0)
                         output = self.autoencoder(combined_input)[-1]
                         loss = nn.MSELoss()(output, combined_input)
-                        total_loss += loss
+                        total_loss += loss.item()
 
-                log_message = f"\tAE Epoch {epoch+1}: {loss:.4f}"
+                avg_val_loss = total_loss / max(1, len(self.val_loader))
+                log_message = f"\tAE Epoch {epoch+1}: {avg_val_loss:.4f}"
 
-                total_loss /= len(self.val_loader)
-                if total_loss < best_ae_val:
+                if avg_val_loss < best_ae_val:
                     log_message += " <- New Best"
-                    best_ae_val = total_loss
+                    best_ae_val = avg_val_loss
                     torch.save(self.autoencoder.state_dict(), ae_filename)
 
                 logger.info(log_message)
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
 
-        for name, param in self.autoencoder.named_parameters():
-            if param.grad is not None:
-                if torch.isnan(param.grad).any():
-                    print(f"NaN detected in gradient of {name}")
-                if torch.isinf(param.grad).any():
-                    print(f"Inf detected in gradient of {name}")
-                    
-        unet_optimizer = optim.Adam(self.unet.parameters(), lr=3e-5, weight_decay=1e-5)
-
-        best_unet_val = 1e7
+        alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-5, weight_decay=1e-5)
+        best_alignment_val = float('inf')
 
         self.autoencoder.to(device)
-        self.unet.to(device)
-
+        self.alignment_model.to(device)
         self.autoencoder.eval()
         for epoch in range(num_epochs):
-            self.unet.train()
-            self._unet_run(
+            self.alignment_model.train()
+            self._alignment_run(
                 autoencoder=self.autoencoder,
-                unet_model=self.unet,
-                optimizer=unet_optimizer,
-                dataloader=self.train_loader,
+                alignment_model=self.alignment_model,
+                optimizer=alignment_optimizer,
+                dataloader=self.align_train_loader, 
                 device=device,
                 train=True
             )
-
-            #for name, param in self.unet.named_parameters():
-            #    if param.grad is not None:
-            #        if torch.isnan(param.grad).any():
-            #            print(f"NaN detected in gradient of {name}")
-            #        if torch.isinf(param.grad).any():
-            #            print(f"Inf detected in gradient of {name}")
-            torch.nn.utils.clip_grad_norm_(self.unet.parameters(), 1)
-            
-            epoch_loss = self._unet_run(
+            torch.nn.utils.clip_grad_norm_(self.alignment_model.parameters(), 1)
+            epoch_loss = self._alignment_run(
                 autoencoder=self.autoencoder,
-                unet_model=self.unet,
+                alignment_model=self.alignment_model,
                 optimizer=None,
-                dataloader=self.val_loader,
+                dataloader=self.align_val_loader, 
                 device=device,
                 train=False
             )
-            
-            log_message = f"\tUNET Epoch {epoch+1}: {epoch_loss:.4f}"
+            log_message = f"\tAlignment Epoch {epoch+1}: {epoch_loss:.4f}"
 
-            if epoch_loss < best_unet_val:
+            if epoch_loss < best_alignment_val:
                 log_message += " <- New Best"
-                best_unet_val = epoch_loss
-                torch.save(self.unet.state_dict(), unet_filename)
+                best_alignment_val = epoch_loss
+                torch.save(self.alignment_model.state_dict(), alignment_filename)
 
             logger.info(log_message)
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
-        self.unet.load_state_dict(torch.load(unet_filename, weights_only=True))
+        self.alignment_model.load_state_dict(torch.load(alignment_filename, weights_only=True))
 
-    def classification_train_loop(self, classifier_filename, device, num_epochs=100):
+
+    def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_alignment=False):
+        """
+        Trains the classifier using supervised learning, tracks best validation performance, and saves the best model checkpoint.
+
+        Args:
+            classifier_filename (str): Path to save the best model weights.
+            device (torch.device): Device to perform training on.
+            num_epochs (int, optional): Number of training epochs. Default is 100.
+            target_only (bool, optional): If True, only target samples are used for training. Default is False.
+            use_alignment (bool, optional): If True, processes inputs with the alignment model before classification. Default is False.
+
+        Returns:
+            float: Best validation loss achieved during training.
+        """
+
         optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
                               nesterov=True, weight_decay=1e-2)
-        
+
         scheduler = CosineAnnealingWarmRestarts(
             optimizer=optimizer,
             T_0=20,
@@ -1428,16 +1068,20 @@ class PreloaderTrainer:
             eta_min=1e-8
         )
 
-        best_val = 1e7
+        best_val_loss = 1e7
+
+        self.classifier.to(device)
+        self.alignment_model.to(device)
+        self.alignment_model.eval()
 
         for epoch in range(num_epochs):
             train_loss, train_acc = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = optimizer,
-                dataloader = self.train_loader,
-                mode = "both",
-                device = device
+                optimizer=optimizer,
+                dataloader=self.train_loader,
+                device=device,
+                target_only=target_only,
+                train=True,
+                use_alignment=use_alignment
             )
 
             current_lr = optimizer.param_groups[0]['lr']
@@ -1446,191 +1090,66 @@ class PreloaderTrainer:
             scheduler.step() 
 
             val_loss, val_acc = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = optimizer,
-                dataloader = self.val_loader,
-                mode = "base_only",
-                device = device,
-                train = False
-            )
-            
-            test_loss, test_acc = self._classification_run(
-                model = self.classifier,
-                unet_model = self.unet,
-                optimizer = optimizer,
-                dataloader = self.test_loader,
-                mode = "base_only",
-                device = device,
-                train = False
-            )        
-
-            log_message = f"\tEpoch {epoch+1}: {train_loss:.4f} {train_acc*100:.2f} {val_loss:.4f} {val_acc*100:.2f}"
-
-            if val_loss < best_val:
-                log_message += " <- New Best"
-                best_val = val_loss
-                torch.save(self.classifier.state_dict(), classifier_filename)
-
-            logger.info(log_message)
-
-        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
-
-    def evaluate_model(self, device, test=False):
-        if test:
-            _, acc = self._classification_run(
-                model=self.classifier,
-                unet_model=None,
-                optimizer=None,
-                dataloader=self.test_loader,
-                device=device,
-                mode="base_only",
-                train=False,
-            )
-        else:
-            _, acc = self._classification_run(
-                model=self.classifier,
-                unet_model=None,
                 optimizer=None,
                 dataloader=self.val_loader,
                 device=device,
-                mode="base_only",
+                target_only=True,
                 train=False,
+                use_alignment=use_alignment
             )
 
-        return acc             
+            test_loss, test_acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_alignment=use_alignment
+            )
 
-    def _unet_run(self, autoencoder, unet_model, optimizer, dataloader, device, train=True):
-        criterion = ISEBSW
-        unet_model.to(device)
-        autoencoder.to(device)
+            log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
 
-        if train:
-            unet_model.train()
-        else:
-            unet_model.eval()
+            if val_loss < best_val_loss:
+                log_message += " <- New Best"
+                best_val_loss = val_loss
+                torch.save(self.classifier.state_dict(), classifier_filename)
 
-        autoencoder.eval()
-
-        running_loss = 0.0
-
-        for base_samples, aux_samples, _ in dataloader: 
-            base_samples, aux_samples = base_samples.to(device), aux_samples.to(device)
-            #logger.info(f"Sample mins: {base_samples.min().item()}, {aux_samples.min().item()}")
-            #logger.info(f"Sample maxs: {base_samples.max().item()}, {aux_samples.max().item()}")
-            if train:
-                optimizer.zero_grad()
-
-            #rnd1 = torch.randn_like(base_samples)
-            #rnd2 = torch.randn_like(aux_samples)
-            #out1 = autoencoder(rnd1)
-            #out2 = autoencoder(rnd2)
-            #print(f"Random diff: {torch.abs(out1[-1] - out2[-1]).max().item()}")
-            
-            with torch.set_grad_enabled(train):
-                #logger.info(f"Samples {torch.isnan(aux_samples).any()}, {torch.isnan(aux_samples).sum()}")
-                unet_output = unet_model(aux_samples)[-1]
-                #logger.info(f"{unet_output.mean().item()} {unet_output.std().item()}")
-                #logger.info(f"UNET {torch.isnan(unet_output).any()}, {torch.isnan(unet_output).sum()}")
-                base_reps = autoencoder(base_samples)
-                #logger.info(f"{[base_reps[i].min().item() for i in range(len(base_reps))]}")
-                #logger.info(f"{[base_reps[i].max().item() for i in range(len(base_reps))]}")
-                #logger.info(f"Base {torch.isnan(base_reps).any()}, {torch.isnan(base_reps).sum()}") 
-                aux_reps = autoencoder(unet_output)
-                #logger.info(f"{[aux_reps[i].min().item() for i in range(len(aux_reps))]}")
-                #logger.info(f"{[aux_reps[i].max().item() for i in range(len(aux_reps))]}")  
-                #logger.info(f"Weights: {unet_model.latent_weight} {unet_model.noise_weight}")
-                #logger.info(f"Aux {torch.isnan(aux_reps).any()}, {torch.isnan(aux_reps).sum()}") 
-            
-            loss = 0
-            for i in range(len(base_reps)//2):
-                base_reshaped = base_reps[i].view(base_reps[i].size(0), -1)
-                #logger.info(f"Base {torch.isnan(base_reshaped).any()}, {torch.isnan(base_reshaped).sum()}") 
-                aux_reshaped = aux_reps[i].view(aux_reps[i].size(0), -1)
-                #logger.info(f"Aux {torch.isnan(aux_reshaped).any()}, {torch.isnan(aux_reshaped).sum()}") 
-                loss += criterion(base_reshaped, aux_reshaped, L=256, device=device)
-                #logger.info(loss)
-                #np.save(np.array(base_reshaped.cpu()), f"files/base_re_{i}.npy")
-                #np.save(np.array(aux_reshaped.cpu().detach()), f"files/aux_re_{i}.npy")    
-                
-            if train:
-                loss.backward()
-                optimizer.step()
-
-            running_loss += loss.item()
-
-        epoch_loss = running_loss / len(dataloader)
-
-        return epoch_loss
-
-    def _classification_run(self, model, optimizer, dataloader, device, mode, train=True, unet_model=None):
-        """
-        Run one epoch of training or evaluation on the given dataset.
+            logger.info(log_message)
         
+        self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
+
+        return best_val_loss    
+
+    def evaluate_model(self, device, use_alignment=False, test=False):
+        """
+        Evaluates the model on the validation or test set.
+
         Args:
-        - model: The neural network model
-        - optimizer: The optimizer for the model (used only if train=True)
-        - dataloader: DataLoader instance for the dataset
-        - mode: 'base_only', 'base_and_aux', or 'contrastive'
-        - train: Boolean, if True, run in training mode; if False, run in evaluation mode
-        
+            device: torch.device to evaluate on.
+            use_alignment: Whether to use the alignment model for preprocessing.
+            test: If True, evaluates on test set; else on validation set.
+
         Returns:
-        - Average loss for the epoch
-        - Accuracy for the epoch (for classification) or None (for contrastive)
+            loss (float), acc (float): Average loss and accuracy.
         """
-
-        criterion = nn.CrossEntropyLoss()
-        model.to(device)
-
-        if train:
-            model.train()
+        if test:
+            loss, acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.test_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_alignment=use_alignment
+            )
         else:
-            model.eval()
+            loss, acc = self._classification_run(
+                optimizer=None,
+                dataloader=self.val_loader,
+                device=device,
+                target_only=True,
+                train=False,
+                use_alignment=use_alignment
+            )
+        return loss, acc
 
-        if unet_model:
-            unet_model.to(device)
-            unet_model.eval()
-        
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        
-        for base_samples, aux_samples, labels in dataloader:
-            labels = labels.long()
-            base_samples, aux_samples, labels = base_samples.to(device), aux_samples.to(device), labels.to(device)
-            
-            if train:
-                optimizer.zero_grad()
-            
-            with torch.set_grad_enabled(train):
-                if mode == 'base_only' and unet_model == None:
-                    outputs = model(base_samples)[-1]
-                    loss = criterion(outputs, labels)
-                    
-                    _, predicted = outputs.max(1)
-                    total += labels.size(0)
-                    correct += predicted.eq(labels).sum().item()
-                
-                else:
-                    if unet_model != None:
-                        aux_samples = unet_model(aux_samples)[-1]
-
-                    inputs = torch.cat((base_samples, aux_samples), 0)
-
-                    outputs = model(inputs)[-1]
-                    loss = criterion(outputs, labels.repeat(2))
-                    
-                    _, predicted = outputs.max(1)
-                    total += labels.size(0) * 2
-                    correct += predicted.eq(labels.repeat(2)).sum().item()
-            
-            if train:
-                loss.backward()
-                optimizer.step()
-            
-            running_loss += loss.item()
-        
-        epoch_loss = running_loss / len(dataloader)
-        epoch_accuracy = correct / total
-        
-        return epoch_loss, epoch_accuracy
+          
