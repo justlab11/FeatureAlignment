@@ -478,14 +478,14 @@ def main(config_fname):
     contrast_example_file = f"{IMAGE_FOLDER}/contrast_examples_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     plotters.plot_examples(
-        dataset=train_ds,
+        dataset=test_ds,
         alignment_model=mixed_model_trainer.alignment_model,
         filename=mixed_example_file,
         device=DEVICE
     )
 
     plotters.plot_examples(
-        dataset=train_ds,
+        dataset=test_ds,
         alignment_model=contrast_model_trainer.alignment_model,
         filename=contrast_example_file,
         device=DEVICE
