@@ -709,7 +709,7 @@ class FullTrainer:
 
             plot_examples(
                 dataset=self.classifier_dataloaders.val_loader.dataset,
-                unet_model=self.alignment_model,
+                alignment_model=self.alignment_model,
                 filename=alignment_layer_examples_fname,
                 device=device
             )
