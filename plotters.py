@@ -467,7 +467,7 @@ class EBSW_Plotter:
                 data = mode[cat]
                 means = np.mean(data, axis=0)
                 stds = np.std(data, axis=0)
-                x = range(len(means))
+                x = np.arange(len(means))
 
                 if len(modes) == 2:
                     offset = .1*j - 0.05 # proper offset value for two error bars
