@@ -469,9 +469,14 @@ class EBSW_Plotter:
                 stds = np.std(data, axis=0)
                 x = range(len(means))
 
+                if len(modes) == 2:
+                    offset = .1*j - 0.05 # proper offset value for two error bars
+                else:
+                    offset = .1*j - .1
+
                 axs[i].grid(True, linestyle=":", alpha=.7)
                 axs[i].errorbar(
-                    x, means, yerr=stds, capsize=5, marker='o',
+                    x+offset, means, yerr=stds, capsize=5, marker='o',
                     color=colors[j], ecolor=colors[j],
                     markersize=8, linewidth=2, capthick=2,
                     label=f'{mode_labels[j]} Samples', linestyle='none'
