@@ -176,16 +176,18 @@ def main(config_fname):
     logger.info(f"\tTest Dataset - Target: {test_ds.get_target_size()}, Source: {test_ds.get_source_size()}")
     logger.info(f"\tValidation Dataset - Target: {val_ds.get_target_size()}, Source: {val_ds.get_source_size()}")
 
+    NUM_WORKERS = 7 # for runpod
+
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=False, pin_memory=True
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, drop_last=False, pin_memory=True
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False
+        test_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     cls_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False
+        val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
@@ -216,15 +218,15 @@ def main(config_fname):
     )
 
     align_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True
+        train_ds, batch_sampler=train_sampler, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     align_test_loader = torch.utils.data.DataLoader(
-        test_ds, batch_sampler=test_sampler
+        test_ds, batch_sampler=test_sampler, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     align_val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_sampler=val_sampler
+        val_ds, batch_sampler=val_sampler, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     align_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
