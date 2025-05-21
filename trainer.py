@@ -799,7 +799,7 @@ class FullTrainer:
         intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
         val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
         test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots")
+        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
 
         np.save(val_fname, classifier_val_accs)
         np.save(test_fname, classifier_test_accs)
