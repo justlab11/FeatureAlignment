@@ -15,6 +15,7 @@ The codebase is organized into several key components:
 - `helpers.py`: Utility functions for model building and data processing
 - `plotters.py`: Visualization tools for model analysis
 - `type_defs.py`: Type definitions and configuration models
+- `loss_comparison_analysis.ipynb`: Synthetic 3D experiments comparing divergence measures (CC-EBSW, CC-MMD, InfoNCE, etc.) across different domain alignment scenarios with varying geometric configurations and class distributions
 
 ## Installation
 
