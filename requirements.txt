@@ -1,13 +1,13 @@
 torch
 torchvision
-numpy
-scikit-learn
-matplotlib
-pydantic
-PyYAML
-click
-opencv-python
-pillow-heif
+numpy==2.2.4
+scikit-learn==1.6.1
+matplotlib==3.10.1
+pydantic==2.10.6
+PyYAML==6.0.2
+click==8.1.8
+opencv-python==4.11.0.86
+pillow-heif==0.22.0
 
 --extra-index-url https://download.pytorch.org/whl/cu118
 
