@@ -256,7 +256,7 @@ def main(config_fname):
         logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
 
-    
+
 
     logger.info("TRAINING CLASSIFIERS")
     logger.info("--------------------")
@@ -305,10 +305,18 @@ def main(config_fname):
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    model: models.DynamicResNet = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=TARGET_NUM_CLASSES,
-    )
+    if "resnet" in CONFIG.classifier.model:
+        model: models.DynamicResNet = models.DynamicResNet(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    elif "vgg" in CONFIG.classifier.model:
+        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    else:
+        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
 
     unet = build_unet()
 
@@ -336,10 +344,19 @@ def main(config_fname):
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    model: models.DynamicResNet = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=TARGET_NUM_CLASSES,
-    )
+    if "resnet" in CONFIG.classifier.model:
+        model: models.DynamicResNet = models.DynamicResNet(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    elif "vgg" in CONFIG.classifier.model:
+        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    else:
+        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
+
 
     unet = build_unet()
 
@@ -368,10 +385,18 @@ def main(config_fname):
     contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    model: models.DynamicResNet = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=TARGET_NUM_CLASSES
-    )
+    if "resnet" in CONFIG.classifier.model:
+        model: models.DynamicResNet = models.DynamicResNet(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    elif "vgg" in CONFIG.classifier.model:
+        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
+    else:
+        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
 
     unet = build_unet()
 
