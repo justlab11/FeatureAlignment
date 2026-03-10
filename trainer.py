@@ -3,11 +3,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np 
-from os import path
+import os
 import logging
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 import gc
 from typing import List
+import shutil
 
 from models import DynamicCNN
 from losses import supervised_contrastive_loss, ISEBSW, mmdfuse, fully_supervised_contrastive_loss
@@ -388,7 +389,7 @@ class ClassifierTrainer:
         
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
-        return best_val_loss    
+        return best_val_acc    
 
     def evaluate_model(self, device, use_alignment=False, test=False):
         """
@@ -628,379 +629,229 @@ class FullTrainer:
             alignment_loss=self.alignment_loss
         )
 
-    def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
-        num_layers = self.classifier.get_num_layers()
-        layers = [i for i in range(num_layers)]
+def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
+    num_layers = self.classifier.get_num_layers()
+    layers = [i for i in range(num_layers)]
 
-        best_layer_val_loss = 1e7
-        best_layer_val_acc = 0
+    # Save the fixed pre-trained starting point for the classifier
+    pretrained_fname = os.path.splitext(classifier_fname)[0] + "-pretrained.pt"
+    torch.save(self.classifier.state_dict(), pretrained_fname)
 
-        best_layer_test_loss = 1e7
-        best_layer_test_acc = 0
-        
-        best_layer = None
+    best_layer_val_acc = 0
+    best_layer_val_loss = 1e7
+    best_layer_test_acc = 0
+    best_layer_test_loss = 1e7
+    best_layer = None
 
-        inter_layer_distances = []
-        intra_layer_distances = []
-        classifier_val_accs = []
-        classifier_test_accs = []
+    inter_layer_distances = []
+    intra_layer_distances = []
+    classifier_val_accs = []
+    classifier_test_accs = []
 
-        ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
-            dataloaders=self.alignment_dataloaders,
-            batch_size=self.classifier_dataloaders.train_loader.batch_size
+    ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
+        dataloaders=self.alignment_dataloaders,
+        batch_size=self.classifier_dataloaders.train_loader.batch_size
+    )
+
+    # Divergence before any alignment
+    if self.alignment_loss == "ebsw":
+        inter = ebsw_plotter.run_isebsw(
+            model=self.classifier,
+            dataloader=self.alignment_dataloaders.val_loader,
+            layers=[j for j in range(num_layers - 1)],
+            device=device, target_only=True, alignment_model=None, num_projections=256
+        )
+        intra = ebsw_plotter.run_isebsw(
+            model=self.classifier,
+            dataloader=self.alignment_dataloaders.val_loader,
+            layers=[j for j in range(num_layers - 1)],
+            device=device, target_only=False, alignment_model=None, num_projections=256
+        )
+    else:
+        inter = ebsw_plotter.run_mmdfuse(
+            model=self.classifier,
+            dataloader=self.alignment_dataloaders.val_loader,
+            layers=[j for j in range(num_layers - 1)],
+            device=device, target_only=True, alignment_model=None
+        )
+        intra = ebsw_plotter.run_mmdfuse(
+            model=self.classifier,
+            dataloader=self.alignment_dataloaders.val_loader,
+            layers=[j for j in range(num_layers - 1)],
+            device=device, target_only=False, alignment_model=None
         )
 
-        # calculate divergence performance before any alignment
+    inter_layer_distances.append(inter)
+    intra_layer_distances.append(intra)
+
+    for i in range(1, num_layers + 1):
+        layer_set: List[int] = layers[-i:]
+        start_layer: int = layer_set[0]
+        logger.info(f"COVERING LAYERS: {layer_set}\n")
+
+        # File os.paths for this span
+        working_classifier_fname = os.path.splitext(classifier_fname)[0] + f"-{start_layer}-working.pt"
+        working_alignment_fname  = os.path.splitext(alignment_fname)[0]  + f"-{start_layer}-working.pt"
+        best_classifier_fname    = os.path.splitext(classifier_fname)[0] + f"-{start_layer}-best.pt"
+        best_alignment_fname     = os.path.splitext(alignment_fname)[0]  + f"-{start_layer}-best.pt"
+        alignment_layer_examples_fname = os.path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
+
+        # Reset classifier to fixed pre-trained starting point for this span
+        self.classifier.load_state_dict(torch.load(pretrained_fname, weights_only=True))
+
+        # Save the alignment model's pre-span state so we can reset it between inner iterations if needed
+        pre_span_alignment_fname = os.path.splitext(alignment_fname)[0] + f"-{start_layer}-prespan.pt"
+        torch.save(self.alignment_model.state_dict(), pre_span_alignment_fname)
+
+        best_span_val_acc = 0.0
+        prev_iter_val_acc = 0.0
+
+        inner_iter = 0
+        while True:
+            logger.info(f"\tSpan {start_layer} | Inner iteration {inner_iter + 1}")
+
+            # Step 1: Train alignment model (classifier frozen)
+            self.classifier.eval()
+            for param in self.classifier.parameters():
+                param.requires_grad = False
+
+            self.alignment_trainer.cascade_alignment_train_loop(
+                layers=layer_set,
+                device=device,
+                alignment_fname=working_alignment_fname,
+                epochs=num_epochs
+            )
+            # Load the best alignment weights from this alignment run
+            self.alignment_model.load_state_dict(
+                torch.load(working_alignment_fname, weights_only=True)
+            )
+
+            # Step 2: Fine-tune classifier head only (body stays frozen)
+            self.classifier.train()
+            self.classifier.set_freeze_head(False)
+            self.classifier.set_freeze_body(True)
+
+            self.classifier_trainer.classification_train_loop(
+                classifier_filename=working_classifier_fname,
+                device=device,
+                num_epochs=num_epochs,
+                use_alignment=True,
+            )
+            # Load best classifier weights from this finetuning run
+            self.classifier.load_state_dict(
+                torch.load(working_classifier_fname, weights_only=True)
+            )
+
+            # Evaluate on validation set
+            val_loss, val_acc = self.classifier_trainer.evaluate_model(device=device)
+
+            logger.info(f"\tSpan {start_layer} | Iter {inner_iter + 1} | Val acc: {val_acc*100:.2f}%")
+
+            if val_acc > best_span_val_acc:
+                best_span_val_acc = val_acc
+                # Promote working checkpoints to span-best
+                shutil.copy(working_classifier_fname, best_classifier_fname)
+                shutil.copy(working_alignment_fname, best_alignment_fname)
+
+            # Stop if val acc didn't improve over the previous inner iteration
+            if inner_iter > 0 and val_acc <= prev_iter_val_acc:
+                logger.info(f"\tSpan {start_layer}: no improvement, stopping inner loop.")
+                break
+
+            prev_iter_val_acc = val_acc
+            inner_iter += 1
+
+        # Load best span checkpoints before evaluation and divergence measurement
+        self.classifier.load_state_dict(torch.load(best_classifier_fname, weights_only=True))
+        self.alignment_model.load_state_dict(torch.load(best_alignment_fname, weights_only=True))
+
+        # Clean up working and pre-span files
+        for f in [working_classifier_fname, working_alignment_fname, pre_span_alignment_fname]:
+            if os.path.exists(f):
+                os.remove(f)
+
+        plot_examples(
+            dataset=self.classifier_dataloaders.val_loader.dataset,
+            alignment_model=self.alignment_model,
+            filename=alignment_layer_examples_fname,
+            device=device
+        )
+
+        # Divergence after this span's alignment
         if self.alignment_loss == "ebsw":
             inter = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=True,
-                alignment_model=None,
-                num_projections=256
+                layers=[j for j in range(num_layers - 1)],
+                device=device, target_only=True,
+                alignment_model=self.alignment_model, num_projections=256
             )
-
             intra = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=False,
-                alignment_model=None,
-                num_projections=256
+                layers=[j for j in range(num_layers - 1)],
+                device=device, target_only=False,
+                alignment_model=self.alignment_model, num_projections=256
             )
-
         else:
             inter = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=True,
-                alignment_model=None,
+                layers=[j for j in range(num_layers - 1)],
+                device=device, target_only=True,
+                alignment_model=self.alignment_model
             )
-
             intra = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=False,
-                alignment_model=None,
+                layers=[j for j in range(num_layers - 1)],
+                device=device, target_only=False,
+                alignment_model=self.alignment_model
             )
 
         inter_layer_distances.append(inter)
         intra_layer_distances.append(intra)
 
-        for i in range(1, num_layers+1):
-            layer_set: List[int] = layers[-i:]
-            logger.info(f"COVERING LAYERS: {layer_set}\n")
-            start_layer: int = layer_set[0]
-            classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"
-            alignment_layer_fname: str = path.splitext(alignment_fname)[0] + f"-{start_layer}.pt"
-            alignment_layer_examples_fname: str = path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
+        classifier_val_loss, classifier_val_acc = self.classifier_trainer.evaluate_model(device=device)
+        classifier_val_accs.append(classifier_val_acc)
 
-            alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
-                layers=layer_set,
-                device=device,
-                alignment_fname=alignment_layer_fname,
-                epochs=num_epochs
-            )
+        classifier_test_loss, classifier_test_acc = self.classifier_trainer.evaluate_model(device=device, test=True)
+        classifier_test_accs.append(classifier_test_acc)
 
-            plot_examples(
-                dataset=self.classifier_dataloaders.val_loader.dataset,
-                alignment_model=self.alignment_model,
-                filename=alignment_layer_examples_fname,
-                device=device
-            )
+        # Update global best span
+        if classifier_val_acc > best_layer_val_acc:
+            best_layer_val_acc = classifier_val_acc
+            best_layer_val_loss = classifier_val_loss
+            best_layer_test_acc = classifier_test_acc
+            best_layer_test_loss = classifier_test_loss
+            best_layer = start_layer
 
-            _ = self.classifier_trainer.classification_train_loop(
-                classifier_filename=classifier_layer_fname,
-                device=device,
-                num_epochs=num_epochs,
-                use_alignment=True,
-            )
+    # --- Post-loop: load globally best span ---
+    logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f}")
+    classifier_best_fname = os.path.splitext(classifier_fname)[0] + f"-{best_layer}-best.pt"
+    alignment_best_fname  = os.path.splitext(alignment_fname)[0]  + f"-{best_layer}-best.pt"
 
-            if self.alignment_loss == "ebsw":
-                inter = ebsw_plotter.run_isebsw(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=True,
-                    alignment_model=self.alignment_model,
-                    num_projections=256
-                )
+    self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
+    self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
 
-                intra = ebsw_plotter.run_isebsw(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=False,
-                    alignment_model=self.alignment_model,
-                    num_projections=256
-                )
+    # Save arrays and plots
+    inter_layer_distances = np.array(inter_layer_distances)
+    intra_layer_distances = np.array(intra_layer_distances)
+    classifier_val_accs   = np.array(classifier_val_accs)
+    classifier_test_accs  = np.array(classifier_test_accs)
 
-            else:
-                inter = ebsw_plotter.run_mmdfuse(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=True,
-                    alignment_model=self.alignment_model,
-                )
+    model_name = self.classifier_name
+    np.save(os.path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy"), inter_layer_distances)
+    np.save(os.path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy"), intra_layer_distances)
+    np.save(os.path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy"),   classifier_val_accs)
+    np.save(os.path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy"),  classifier_test_accs)
 
-                intra = ebsw_plotter.run_mmdfuse(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=False,
-                    alignment_model=self.alignment_model,
-                )
-
-            inter_layer_distances.append(inter)
-            intra_layer_distances.append(intra)
-
-            classifier_val_loss, classifier_val_acc = self.classifier_trainer.evaluate_model(
-                device=device,
-            )
-            classifier_val_accs.append(classifier_val_acc)
-
-            classifier_test_loss, classifier_test_acc = self.classifier_trainer.evaluate_model(
-                device=device, test=True
-            )
-            classifier_test_accs.append(classifier_test_acc)
-
-            if classifier_val_acc > best_layer_val_acc:
-                best_layer_val_acc: float = classifier_val_acc
-                best_layer_val_loss: float = classifier_val_loss
-
-                best_layer_test_acc: float = classifier_test_acc
-                best_layer_test_loss: float = classifier_test_loss
-                
-                best_layer: int = start_layer
-
-        logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
-        classifier_best_fname: str = classifier_fname[:-3] + f"-{best_layer}.pt"
-        alignment_best_fname: str = alignment_fname[:-3] + f"-{best_layer}.pt"
-
-        self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
-        self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
-
-        inter_layer_distances = np.array(inter_layer_distances)
-        intra_layer_distances = np.array(intra_layer_distances)
-        classifier_val_accs = np.array(classifier_val_accs)
-        classifier_test_accs = np.array(classifier_test_accs)
-
-        model_name: str = self.classifier_name
-        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
-        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
-        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
-        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
-
-        np.save(val_fname, classifier_val_accs)
-        np.save(test_fname, classifier_test_accs)
-        np.save(inter_fname, inter_layer_distances)
-        np.save(intra_fname, intra_layer_distances)
-
-        divergence_plots(
-            inter_data=inter_layer_distances,
-            intra_data=intra_layer_distances,
-            val_acc_values=classifier_val_accs,
-            fname=div_plots_fname
-        )
-
-    def single_layer_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
-        num_layers = self.classifier.get_num_layers()
-        layers = [i for i in range(num_layers)]
-
-        best_layer_val_acc = 0
-
-        best_layer_test_loss = 1e7
-        best_layer_test_acc = 0
-        
-        best_layer = None
-
-        inter_layer_distances = []
-        intra_layer_distances = []
-        classifier_val_accs = []
-        classifier_test_accs = []
-
-        ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
-            dataloaders=self.alignment_dataloaders,
-            batch_size=self.classifier_dataloaders.train_loader.batch_size
-        )
-
-        # calculate divergence performance before any alignment
-        if self.alignment_loss == "ebsw":
-            inter = ebsw_plotter.run_isebsw(
-                model=self.classifier,
-                dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=True,
-                alignment_model=None,
-                num_projections=256
-            )
-
-            intra = ebsw_plotter.run_isebsw(
-                model=self.classifier,
-                dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=False,
-                alignment_model=None,
-                num_projections=256
-            )
-
-        else:
-            inter = ebsw_plotter.run_mmdfuse(
-                model=self.classifier,
-                dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=True,
-                alignment_model=None,
-            )
-
-            intra = ebsw_plotter.run_mmdfuse(
-                model=self.classifier,
-                dataloader=self.alignment_dataloaders.val_loader,
-                layers=[j for j in range(num_layers-1)],
-                device=device,
-                target_only=False,
-                alignment_model=None,
-            )
-
-        inter_layer_distances.append(inter)
-        intra_layer_distances.append(intra)
-
-        for i in range(1, num_layers+1):
-            layer_set: List[int] = list(layers[-i])
-            logger.info(f"COVERING LAYERS: {layer_set}\n")
-            start_layer: int = layer_set[0]
-            classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"
-            alignment_layer_fname: str = path.splitext(alignment_fname)[0] + f"-{start_layer}.pt"
-            alignment_layer_examples_fname: str = path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
-
-            alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
-                layers=layer_set,
-                device=device,
-                alignment_fname=alignment_layer_fname,
-                epochs=num_epochs
-            )
-
-            plot_examples(
-                dataset=self.classifier_dataloaders.val_loader.dataset,
-                alignment_model=self.alignment_model,
-                filename=alignment_layer_examples_fname,
-                device=device
-            )
-
-            _ = self.classifier_trainer.classification_train_loop(
-                classifier_filename=classifier_layer_fname,
-                device=device,
-                num_epochs=num_epochs,
-                use_alignment=True,
-            )
-
-            if self.alignment_loss == "ebsw":
-                inter = ebsw_plotter.run_isebsw(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=True,
-                    alignment_model=self.alignment_model,
-                    num_projections=256
-                )
-
-                intra = ebsw_plotter.run_isebsw(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=False,
-                    alignment_model=self.alignment_model,
-                    num_projections=256
-                )
-
-            else:
-                inter = ebsw_plotter.run_mmdfuse(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=True,
-                    alignment_model=self.alignment_model,
-                )
-
-                intra = ebsw_plotter.run_mmdfuse(
-                    model=self.classifier,
-                    dataloader=self.alignment_dataloaders.val_loader,
-                    layers=[j for j in range(num_layers-1)],
-                    device=device,
-                    target_only=False,
-                    alignment_model=self.alignment_model,
-                )
-
-            inter_layer_distances.append(inter)
-            intra_layer_distances.append(intra)
-
-            classifier_val_loss, classifier_val_acc = self.classifier_trainer.evaluate_model(
-                device=device,
-            )
-            classifier_val_accs.append(classifier_val_acc)
-
-            classifier_test_loss, classifier_test_acc = self.classifier_trainer.evaluate_model(
-                device=device, test=True
-            )
-            classifier_test_accs.append(classifier_test_acc)
-
-            if classifier_val_acc > best_layer_val_acc:
-                best_layer_val_acc: float = classifier_val_acc
-                best_layer_val_loss: float = classifier_val_loss
-
-                best_layer_test_acc: float = classifier_test_acc
-                best_layer_test_loss: float = classifier_test_loss
-                
-                best_layer: int = start_layer
-
-        logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
-        classifier_best_fname: str = classifier_fname[:-3] + f"-{best_layer}.pt"
-        alignment_best_fname: str = alignment_fname[:-3] + f"-{best_layer}.pt"
-
-        self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
-        self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
-
-        inter_layer_distances = np.array(inter_layer_distances)
-        intra_layer_distances = np.array(intra_layer_distances)
-        classifier_val_accs = np.array(classifier_val_accs)
-
-        model_name: str = self.classifier_name
-        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
-        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
-        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
-        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
-
-        np.save(val_fname, classifier_val_accs)
-        np.save(test_fname, classifier_test_accs)
-        np.save(inter_fname, inter_layer_distances)
-        np.save(intra_fname, intra_layer_distances)
-
-        divergence_plots(
-            inter_data=inter_layer_distances,
-            intra_data=intra_layer_distances,
-            val_acc_values=classifier_val_accs,
-            fname=div_plots_fname
-        )
+    divergence_plots(
+        inter_data=inter_layer_distances,
+        intra_data=intra_layer_distances,
+        val_acc_values=classifier_val_accs,
+        fname=os.path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
+    )
 
 class PreloaderTrainer:
     def __init__(self, autoencoder, alignment_model, classifier, cls_dataloaders: DataLoaderSet, align_dataloaders: DataLoaderSet):
@@ -1257,6 +1108,7 @@ class PreloaderTrainer:
             eta_min=1e-8
         )
 
+        best_val_acc = 0
         best_val_loss = 1e7
 
         self.classifier.to(device)
@@ -1298,8 +1150,9 @@ class PreloaderTrainer:
 
             log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
 
-            if val_loss < best_val_loss:
+            if val_acc > best_val_acc:
                 log_message += " <- New Best"
+                best_val_acc = val_acc
                 best_val_loss = val_loss
                 torch.save(self.classifier.state_dict(), classifier_filename)
 

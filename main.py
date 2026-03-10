@@ -297,10 +297,10 @@ def main(config_fname):
         )
 
         baseline_model_trainer.classification_train_loop(
-        classifier_filename=baseline_classifier_filename,
-        device=DEVICE,
-        num_epochs=100,
-        use_alignment=True
+            classifier_filename=baseline_classifier_filename,
+            device=DEVICE,
+            num_epochs=100,
+            use_alignment=True
         )
 
         _, baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
@@ -473,7 +473,7 @@ def main(config_fname):
     mixed_classifier_final_fname = f"{MODEL_FOLDER}/mixed_classifier_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     mixed_examples_final_fname = f"{IMAGE_FOLDER}/mixed_examples_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    mixed_model_trainer.single_layer_train_loop(
+    mixed_model_trainer.cascading_train_loop(
         alignment_fname=mixed_unet_final_fname,
         classifier_fname=mixed_classifier_final_fname,
         examples_fname=mixed_examples_final_fname,
@@ -485,7 +485,7 @@ def main(config_fname):
     contrast_classifier_final_fname = f"{MODEL_FOLDER}/contrast_classifier_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     contrast_examples_final_fname = f"{IMAGE_FOLDER}/contrast_examples_FINAL_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    contrast_model_trainer.single_layer_train_loop(
+    contrast_model_trainer.cascading_train_loop(
         alignment_fname=contrast_unet_final_fname,
         classifier_fname=contrast_classifier_final_fname,
         examples_fname=contrast_examples_final_fname,

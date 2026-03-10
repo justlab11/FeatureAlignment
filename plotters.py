@@ -163,11 +163,8 @@ class TSNE_Plotter:
             "9 - Target", "9 - Source",
         ]
 
-        if filename[-4:] == ".pdf":
-            base_fname = filename[:-4]
-        else:
-            base_fname = filename
-
+        base_fname = path.splitext(filename)[0]
+        
         for name, tsne_values in tsne_data.items():
             fig, ax = plt.subplots(1, 1, figsize=(8,8))
             plt.rcParams['font.size'] = 16
@@ -433,7 +430,7 @@ class EBSW_Plotter:
                 data = mode[cat]
                 means = np.mean(data, axis=0)
                 stds = np.std(data, axis=0)
-                x = range(len(means))
+                x = np.array(range(len(means)))
 
                 if len(modes) == 2:
                     offset = .1*j - 0.05 # proper offset value for two error bars
