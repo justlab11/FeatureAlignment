@@ -9,6 +9,7 @@ from copy import deepcopy
 
 from type_defs import MetaConfig, Config
 
+# load the config into a format we can work with
 def load_meta_config(file_path) -> MetaConfig:
     with open(file_path, "r") as f:
         raw_config = yaml.safe_load(f)
@@ -44,7 +45,9 @@ TEMPLATE_YAML = {
     "classifier": {
         "model": "resnet9",
         "identifier": "MNIST+SVHN",  # unique identifier for the set of models
-        "num_epochs": 100,
+        "mixed_num_epochs": 100,
+        "contrast_num_epochs": 100,
+        "train_baseline": False
     },
     "unet": {
         "loss": "ebsw",

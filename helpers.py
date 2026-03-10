@@ -12,6 +12,21 @@ from models import SmallCustomUNET, LargeCustomUNET, SmallAttentionUNET, LargeAt
 
 logger = logging.getLogger(__name__)
 
+def get_splits(folder: str):
+    train_folder = os.path.join(folder, "train", "**", "*")
+    test_folder = os.path.join(folder, "test", "**", "*")
+    val_folder = os.path.join(folder, "val", "**", "*")
+
+    train_files = glob(train_folder, recursive=True)
+    test_files = glob(test_folder, recursive=True)
+    val_files = glob(val_folder, recursive=True)
+
+    train_files = [f for f in train_files if os.path.isfile(f)]
+    test_files = [f for f in test_files if os.path.isfile(f)]
+    val_files = [f for f in val_files if os.path.isfile(f)]
+
+    return train_files, test_files, val_files
+
 def build_splits(folder: str, split_pcts: List[float], seed):
     # collect list of all files in the folder
     files = glob(

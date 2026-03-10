@@ -27,7 +27,9 @@ class SaveLocations(BaseModel):
 class ClassifierConfig(BaseModel):
     model: str
     identifier: str
-    num_epochs: int
+    mixed_num_epochs: int
+    contrast_num_epochs: int
+    train_baseline: bool
 
 class UNetConfig(BaseModel):
     loss: str

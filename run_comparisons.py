@@ -56,7 +56,9 @@ TEMPLATE_YAML = {
     "classifier": {
         "model": "vgg",
         "identifier": "MNIST+SVHN",  # unique identifier for the set of models
-        "num_epochs": 40,
+        "mixed_num_epochs": 40,
+        "contrast_num_epochs": 40,
+        "train_baseline": False
     },
     "unet": {
         "loss": "ebsw",

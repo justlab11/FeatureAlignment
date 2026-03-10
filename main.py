@@ -1,5 +1,6 @@
 import torch
 from torchvision import transforms
+from torchvision.models import VGG16_Weights
 import numpy as np
 import os
 from typing import Literal, Callable
@@ -131,25 +132,42 @@ def main(config_fname):
             transforms.ToTensor(),
         ])
 
-    target_train_split, target_test_split, target_val_split = helpers.build_splits(
-        folder=target_dir,
-        split_pcts=[
-            CONFIG.dataset.target.train_pct,
-            CONFIG.dataset.target.val_pct,
-            1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
-        ],
-        seed=RNG
-    )
+    # if the dataset was premade (doesn't need to be generated)
+    if os.path.exists(os.path.join(target_dir, "train")):
+        target_train_split, target_test_split, target_val_split = helpers.get_splits(
+            folder=target_dir
+        )
+
+        source_train_split, source_test_split, source_val_split = helpers.get_splits(
+            folder=source_dir
+        )
+
+        transform = transforms.Compose([
+            tr.EnsureThreeChannelsPIL(),
+            VGG16_Weights.IMAGENET1K_V1.transforms()
+        ])
     
-    source_train_split, source_test_split, source_val_split = helpers.build_splits(
-        folder=source_dir,
-        split_pcts=[
-            CONFIG.dataset.source.train_pct,
-            CONFIG.dataset.source.val_pct,
-            1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
-        ],
-        seed=RNG
-    )
+    # if we need to generate the dataset splits
+    else:
+        target_train_split, target_test_split, target_val_split = helpers.build_splits(
+            folder=target_dir,
+            split_pcts=[
+                CONFIG.dataset.target.train_pct,
+                CONFIG.dataset.target.val_pct,
+                1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
+            ],
+            seed=RNG
+        )
+        
+        source_train_split, source_test_split, source_val_split = helpers.build_splits(
+            folder=source_dir,
+            split_pcts=[
+                CONFIG.dataset.source.train_pct,
+                CONFIG.dataset.source.val_pct,
+                1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
+            ],
+            seed=RNG
+        )
 
     train_ds: datasets.CombinedDataset = datasets.CombinedDataset(
         data_folder=target_dir,
@@ -238,45 +256,51 @@ def main(config_fname):
         logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
 
+    
+
     logger.info("TRAINING CLASSIFIERS")
     logger.info("--------------------")
 
-    logger.info("\nTraining Baseline Model")
-    baseline_ae_filename = f"{MODEL_FOLDER}/baseline_autoencoder_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
-    baseline_unet_filename = f"{MODEL_FOLDER}/baseline_unet_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
-    baseline_classifier_filename = f"{MODEL_FOLDER}/baseline_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    if CONFIG.classifier.train_baseline:
+        logger.info("\nTraining Baseline Model")
+        baseline_ae_filename = f"{MODEL_FOLDER}/baseline_autoencoder_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+        baseline_unet_filename = f"{MODEL_FOLDER}/baseline_unet_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+        baseline_classifier_filename = f"{MODEL_FOLDER}/baseline_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    baseline_autoencoder = models.CustomAutoencoder()
-    baseline_unet = build_unet()
-    baseline_classifier = models.DynamicResNet(
-        resnet_type=CONFIG.classifier.model,
-        num_classes=TARGET_NUM_CLASSES,
-    )
+        baseline_autoencoder = models.CustomAutoencoder()
+        baseline_unet = build_unet()
+        baseline_classifier = models.DynamicResNet(
+            resnet_type=CONFIG.classifier.model,
+            num_classes=TARGET_NUM_CLASSES,
+        )
 
-    baseline_model_trainer = trainer.PreloaderTrainer(
-        autoencoder = baseline_autoencoder,
-        alignment_model = baseline_unet,
-        classifier = baseline_classifier,
-        cls_dataloaders = cls_dl_set,
-        align_dataloaders=align_dl_set
-    )
+        baseline_model_trainer = trainer.PreloaderTrainer(
+            autoencoder = baseline_autoencoder,
+            alignment_model = baseline_unet,
+            classifier = baseline_classifier,
+            cls_dataloaders = cls_dl_set,
+            align_dataloaders=align_dl_set
+        )
 
-    baseline_model_trainer.alignment_preloader_train_loop(
-        ae_filename=baseline_ae_filename,
-        alignment_filename=baseline_unet_filename,
+        baseline_model_trainer.alignment_preloader_train_loop(
+            ae_filename=baseline_ae_filename,
+            alignment_filename=baseline_unet_filename,
+            device=DEVICE,
+            train_both=True
+        )
+
+        baseline_model_trainer.classification_train_loop(
+        classifier_filename=baseline_classifier_filename,
         device=DEVICE,
-        train_both=True
-    )
+        num_epochs=100,
+        use_alignment=True
+        )
 
-    baseline_model_trainer.classification_train_loop(
-       classifier_filename=baseline_classifier_filename,
-       device=DEVICE,
-       num_epochs=100,
-       use_alignment=True
-    )
-
-    _, baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
-    logger.info(baseline_acc)
+        _, baseline_acc = baseline_model_trainer.evaluate_model(device=DEVICE, test=True)
+        logger.info(baseline_acc)
+    
+    else:
+        logger.info("Skipping baseline model training because `train_baseline` is set to False in the config file.")
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
@@ -302,7 +326,7 @@ def main(config_fname):
         base_model_trainer.classifier_trainer.classification_train_loop(
             classifier_filename = base_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=CONFIG.classifier.mixed_num_epochs,
             target_only=True,
             use_alignment=False
         )
@@ -333,7 +357,7 @@ def main(config_fname):
         mixed_model_trainer.classifier_trainer.classification_train_loop(
             classifier_filename = mixed_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=CONFIG.classifier.mixed_num_epochs,
             target_only=False,
             use_alignment=False
         )
@@ -365,7 +389,7 @@ def main(config_fname):
         best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
             filename = contrast_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=CONFIG.classifier.contrast_num_epochs,
             temp_range=[0.05],
         )
     else:
