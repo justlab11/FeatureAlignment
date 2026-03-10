@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import logging
 import torch.nn.functional as F
-from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
-
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, vgg16, VGG16_Weights
 
 logger = logging.getLogger(__name__)
 
@@ -1044,3 +1043,90 @@ class ProjNet(nn.Module):
     def forward(self, input):
         out = self.net(input)
         return out / (torch.sqrt(torch.sum((out) ** 2, dim=1, keepdim=True)) + 1e-20)
+
+class DynamicVGGBlockwise(nn.Module):
+    def __init__(self, num_classes=10, imagenet_weights=True):
+        super(DynamicVGGBlockwise, self).__init__()
+        # Load pretrained VGG16
+        weights = VGG16_Weights.IMAGENET1K_V1 if imagenet_weights else None
+        vgg = vgg16(weights=weights)
+
+        # Use the pretrained features and classifier, but group features into blocks
+        features = list(vgg.features.children())
+        # VGG16 block indices (from the paper)
+        self.block1 = nn.Sequential(*features[0:5])   # 2 conv + relu + maxpool
+        self.block2 = nn.Sequential(*features[5:10])  # 2 conv + relu + maxpool
+        self.block3 = nn.Sequential(*features[10:17]) # 3 conv + relu + maxpool
+        self.block4 = nn.Sequential(*features[17:24]) # 3 conv + relu + maxpool
+        self.block5 = nn.Sequential(*features[24:31]) # 3 conv + relu + maxpool
+
+        # Classifier head (replace last layer for custom num_classes)
+        self.avgpool = vgg.avgpool
+
+        classifier_layers = list(vgg.classifier.children())[:-1]
+        classifier_layers.insert(4, nn.Dropout(p=0.5))
+        self.classifier = nn.Sequential(*classifier_layers)
+
+        #self.classifier = nn.Sequential(*list(vgg.classifier.children())[:-1])
+        self.head = nn.Linear(4096, num_classes)
+        # Optionally copy weights from pretrained head if num_classes==1000
+        if num_classes == 1000 and imagenet_weights:
+            self.head.weight.data.copy_(vgg.classifier[6].weight.data)
+            self.head.bias.data.copy_(vgg.classifier[6].bias.data)
+
+        self.freeze_head = False
+        self.freeze_body = False
+
+    def set_freeze_head(self, freeze: bool):
+        self.freeze_head = freeze
+        for param in self.head.parameters():
+            param.requires_grad = not freeze
+        if freeze and self.freeze_body:
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def set_freeze_body(self, freeze: bool):
+        self.freeze_body = freeze
+        for name, param in self.named_parameters():
+            if "head" not in name:
+                param.requires_grad = not freeze
+        if freeze and self.freeze_head:
+            raise ValueError("Cannot freeze both head and body simultaneously.")
+
+    def reset_parameters(self):
+        for module in self.modules():
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
+                nn.init.xavier_normal_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+    def forward(self, x):
+        outputs = [x]
+        x = self.block1(x)
+        outputs.append(x)
+        x = self.block2(x)
+        outputs.append(x)
+        x = self.block3(x)
+        outputs.append(x)
+        x = self.block4(x)
+        outputs.append(x)
+        x = self.block5(x)
+        outputs.append(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        outputs.append(x)
+        x = self.head(x)
+        outputs.append(x)
+        return outputs
+
+    def get_num_layers(self):
+        # 5 conv blocks + classifier + head = 7
+        return 7
+    
+    def get_body_output_size(self):
+        for layer in reversed(self.classifier):
+            if isinstance(layer, nn.Linear):
+                return layer.out_features
+    
+    def get_transform(self):
+        return VGG16_Weights.IMAGENET1K_V1.transforms()
