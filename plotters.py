@@ -21,8 +21,6 @@ class TSNE_Plotter:
         embeds_aux = np.zeros((len(self.val_loader.dataset), self.embed_size))
         labels = np.zeros(len(self.val_loader.dataset))
 
-        self.val_loader.dataset.unique_sources = True
-
         model.to(device)
         model.eval()
 
@@ -40,11 +38,12 @@ class TSNE_Plotter:
                     aux = unet_model(aux)[-1]
 
                 outputs_aux = model(aux)[-2].cpu().numpy()
-                
 
-                embeds_base[i*self.bs:i*self.bs+self.bs] = outputs_base.squeeze()
-                embeds_aux[i*self.bs:i*self.bs+self.bs] = outputs_aux.squeeze()
-                labels[i*self.bs:i*self.bs+self.bs] = z.cpu().squeeze()
+                start = i * self.bs
+                end = start + outputs_base.shape[0]
+                embeds_base[start:end] = outputs_base.squeeze()
+                embeds_aux[start:end] = outputs_aux.squeeze()
+                labels[start:end] = z.cpu().squeeze()
 
         model_embeds = EmbeddingSet(
             base_embeds = embeds_base,
@@ -54,6 +53,16 @@ class TSNE_Plotter:
 
         return model_embeds
     
+    def _add_colorbar(self, fig, ax, color_dict, c_labels):
+        colors = [color_dict[i] for i in range(20)]
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(np.arange(21), cmap.N)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, ticks=np.arange(0.5, 20))
+        cbar.set_ticklabels(c_labels)
+        cbar.set_label("Classes")
+
     def plot_tsne(self, models: ModelSet, accuracies: ModelSet, device,
                   filename, base, aux, unet_models: None|ModelSet=None):
         
@@ -121,35 +130,25 @@ class TSNE_Plotter:
             (contrast_embeds.labels*2, contrast_embeds.labels*2+1)
         )
 
-        plt.rcParams['font.size'] = 16
-
         # Perform t-SNE for all three embedding sets
         tsne = TSNE(n_components=2, random_state=42)
         base_tsne = tsne.fit_transform(base_model_embeds)
         mixed_tsne = tsne.fit_transform(mixed_model_embeds)
         contrast_tsne = tsne.fit_transform(contrast_model_embeds)
 
-        # Create three subplots side by side
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(30, 8))
+        tsne_data = {
+            "base": base_tsne,
+            "mixed": mixed_tsne,
+            "contrast": contrast_tsne
+        }
 
-        # Plot for base embeddings
-        tab20 = plt.cm.get_cmap('tab20')
-        color_dict = {i: tab20(i/20) for i in range(20)}
+        labels = {
+            "base": base_labels,
+            "mixed": mixed_labels,
+            "contrast": contrast_labels
+        }
 
-        scatter1a = ax1.scatter(base_tsne[:len(base_tsne)//2, 0], base_tsne[:len(base_tsne)//2, 1], c=[color_dict[label] for label in base_labels[:len(base_tsne)//2]])
-        scatter1b = ax1.scatter(base_tsne[len(base_tsne)//2:, 0], base_tsne[len(base_tsne)//2:, 1], c=[color_dict[label] for label in base_labels[len(base_tsne)//2:]], marker="x", s=30)
-        ax1.set_title(f'Base Model Embeddings (Accuracy: {round(accuracies.base*100, 2)}%)')
-        ax1.set_xlabel('t-SNE feature 1')
-        ax1.set_ylabel('t-SNE feature 2')
-        colors = [color_dict[i] for i in range(20)]
-        cmap = mcolors.ListedColormap(colors)
-        bounds = np.arange(21)
-        norm = mcolors.BoundaryNorm(bounds, cmap.N)
-
-        # Create the colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax1, ticks=np.arange(0.5, 20))
+        accuracies = accuracies.dict()
 
         c_labels = [
             "0 - Target", "0 - Source",
@@ -163,84 +162,51 @@ class TSNE_Plotter:
             "8 - Target", "8 - Source",
             "9 - Target", "9 - Source",
         ]
-        cbar.set_ticklabels(c_labels)
-        cbar.set_label("Classes")
 
-        tab20 = plt.cm.get_cmap('tab20')
-        color_dict = {i: tab20(i/20) for i in range(20)}
+        if filename[-4:] == ".pdf":
+            base_fname = filename[:-4]
+        else:
+            base_fname = filename
 
-        scatter2a = ax2.scatter(mixed_tsne[:len(mixed_tsne)//2, 0], mixed_tsne[:len(mixed_tsne)//2, 1], c=[color_dict[label] for label in mixed_labels[:len(mixed_tsne)//2]])
-        scatter2b = ax2.scatter(mixed_tsne[len(mixed_tsne)//2:, 0], mixed_tsne[len(mixed_tsne)//2:, 1], c=[color_dict[label] for label in mixed_labels[len(mixed_tsne)//2:]], marker="x", s=30)
-        ax2.set_title(f'Mixed Model Embeddings (Accuracy: {round(accuracies.mixed*100, 2)}%)')
-        ax2.set_xlabel('t-SNE feature 1')
-        ax2.set_ylabel('t-SNE feature 2')
-        colors = [color_dict[i] for i in range(20)]
-        cmap = mcolors.ListedColormap(colors)
-        bounds = np.arange(21)
-        norm = mcolors.BoundaryNorm(bounds, cmap.N)
+        for name, tsne_values in tsne_data.items():
+            fig, ax = plt.subplots(1, 1, figsize=(8,8))
+            plt.rcParams['font.size'] = 16
+            tab20 = plt.cm.get_cmap('tab20')
+            color_dict = {i: tab20(i/20) for i in range(20)}
 
-        # Create the colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax2, ticks=np.arange(0.5, 20))
+            if unet_models and name != "base":
+                ax.set_title(f"{name.upper()} + ShiftNet Embeddings (Accuracy: {round(accuracies[name]*100, 2)}%)")
+            else:
+                ax.set_title(f"{name.upper()} Model Embeddings (Accuracy: {round(accuracies[name]*100, 2)}%)")
 
-        c_labels = [
-            "0 - Target", "0 - Source",
-            "1 - Target", "1 - Source",
-            "2 - Target", "2 - Source",
-            "3 - Target", "3 - Source",
-            "4 - Target", "4 - Source",
-            "5 - Target", "5 - Source",
-            "6 - Target", "6 - Source",
-            "7 - Target", "7 - Source",
-            "8 - Target", "8 - Source",
-            "9 - Target", "9 - Source",
-        ]
-        cbar.set_ticklabels(c_labels)
-        cbar.set_label("Classes")
+            half = len(tsne_values) // 2
+            tsne_labels = labels[name]
 
+            target_scatter = ax.scatter(
+                tsne_values[:half, 0], tsne_values[:half, 1],
+                c=[color_dict[label] for label in tsne_labels[:half]]
+            )
 
-        # Plot for contrast embeddings
-        tab20 = plt.cm.get_cmap('tab20')
-        color_dict = {i: tab20(i/20) for i in range(20)}
+            source_scatter = ax.scatter(
+                tsne_values[half:, 0],
+                tsne_values[half:, 1],
+                c=[color_dict[label] for label in tsne_labels[half:]],
+                marker="x",
+                s=30,
+            )
 
-        scatter3a = ax3.scatter(contrast_tsne[:len(contrast_tsne)//2, 0], contrast_tsne[:len(contrast_tsne)//2, 1], c=[color_dict[label] for label in contrast_labels[:len(contrast_tsne)//2]])
-        scatter3b = ax3.scatter(contrast_tsne[len(contrast_tsne)//2:, 0], contrast_tsne[len(contrast_tsne)//2:, 1], c=[color_dict[label] for label in contrast_labels[len(contrast_tsne)//2:]], marker="x", s=30)
-        ax3.set_title(f'Contrastive Model Embeddings (Accuracy: {round(accuracies.contrast*100, 2)}%)')
-        ax3.set_xlabel('t-SNE feature 1')
-        ax3.set_ylabel('t-SNE feature 2')
-        colors = [color_dict[i] for i in range(20)]
-        cmap = mcolors.ListedColormap(colors)
-        bounds = np.arange(21)
-        norm = mcolors.BoundaryNorm(bounds, cmap.N)
+            self._add_colorbar(
+                fig=fig, ax=ax,
+                color_dict=color_dict,
+                c_labels=c_labels
+            )
 
-        # Create the colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax3, ticks=np.arange(0.5, 20))
-
-        c_labels = [
-            "0 - Target", "0 - Source",
-            "1 - Target", "1 - Source",
-            "2 - Target", "2 - Source",
-            "3 - Target", "3 - Source",
-            "4 - Target", "4 - Source",
-            "5 - Target", "5 - Source",
-            "6 - Target", "6 - Source",
-            "7 - Target", "7 - Source",
-            "8 - Target", "8 - Source",
-            "9 - Target", "9 - Source",
-        ]
-        cbar.set_ticklabels(c_labels)
-        cbar.set_label("Classes")
-
-        fig.suptitle(f"Target - {base.capitalize()} / Source - {aux.capitalize()}")
-
-        plt.tight_layout()
-        plt.savefig(filename, format="pdf", dpi=300)
-
-        plt.close()
-
+            if unet_models:
+                new_filename = base_fname + "+" + name + "+shiftnet.pdf"
+            else:
+                new_filename = base_fname + "+" + name + ".pdf"
+            plt.savefig(new_filename, format="pdf", dpi=300)
+            plt.close()
 
 class EBSW_Plotter:
     def __init__(self, dataloaders: DataLoaderSet, batch_size: int):
@@ -537,6 +503,36 @@ def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
     plt.tight_layout()
     plt.savefig(filename, format="pdf", dpi=300)
     plt.close(fig)
+
+def plot_dataset_examples(dataset, filename, device, num_samples=10):
+    """
+    Plots a grid of example target/source pairs from the dataset
+    before any alignment, to verify data loading and transforms look correct.
+    """
+    num_samples = min(num_samples, len(dataset))
+    random_samples = np.random.choice(len(dataset), num_samples, replace=False)
+
+    fig, axes = plt.subplots(2, num_samples, figsize=(2*num_samples, 4))
+
+    for i, sample_idx in enumerate(random_samples):
+        target, source, label = dataset[sample_idx]
+
+        target_img = np.clip(np.transpose(target.numpy(), (1, 2, 0)), 0, 1)
+        source_img = np.clip(np.transpose(source.numpy(), (1, 2, 0)), 0, 1)
+
+        axes[0, i].imshow(target_img)
+        axes[0, i].axis('off')
+        axes[0, i].set_title(f"Label: {int(label)}", fontsize=8)
+
+        axes[1, i].imshow(source_img)
+        axes[1, i].axis('off')
+
+    axes[0, 0].set_ylabel('Target', fontsize=10)
+    axes[1, 0].set_ylabel('Source', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(filename, format="pdf", dpi=300)
+    plt.close(fig)
     
 def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     """
@@ -607,7 +603,7 @@ def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
 
     outputs = [target]
     for unet_fname in unet_fname_set:
-        unet = buid_unet()
+        unet = build_unet()
         
         unet.to(device)
         unet.load_state_dict(torch.load(unet_fname, weights_only=True))
@@ -627,11 +623,11 @@ def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
         for entry_idx, ax in enumerate(axs):
             img = outputs[num_entries-entry_idx-1][item_idx]
             if img.shape[0] == 3:
-                img.np.transpose(img, (1,2,0))
+                img = np.transpose(img, (1,2,0))
 
             ax.imshow(img)
             ax.axis("off")
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_folder, f"increment_image-{item_idx}.pdf"), dpi=300, bbox_inches='tight')
+        plt.savefig(path.join(output_folder, f"increment_image-{item_idx}.pdf"), dpi=300, bbox_inches='tight')
         plt.close()
