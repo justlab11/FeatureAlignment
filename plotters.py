@@ -4,11 +4,11 @@ import logging
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from typing import List, Callable
 from os import path
 
 from losses import ISEBSW, mmdfuse
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
-from helpers import make_unet
 
 class TSNE_Plotter:
     def __init__(self, dataloaders: DataLoaderSet, embed_size: int, bs:int):
@@ -589,13 +589,35 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
     plt.close()
 
-def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
-    build_unet = make_unet(
-        size=32,
-        attention=False,
-        base_channels=2,
-        noise_channels=2
-    )
+def incremental_sample_plots(dataloader, unet_fname_set: List[str], device, output_folder: str, build_unet: Callable):
+    """
+    Generate side-by-side visualization plots comparing target images, outputs from incremental
+    U-Net model checkpoints, and source inputs.
+
+    Takes the first batch from a dataloader, extracts 16 samples, and runs inference using each
+    provided U-Net model file (assumed to be training checkpoints or variants). Creates one PDF
+    per sample showing the progression from source input (left) to target (right), useful for
+    inspecting model training evolution or comparisons.
+
+    Args:
+        dataloader (torch.utils.data.DataLoader): Dataloader yielding (x, y, _) batches where
+            x are targets and y are source inputs (expects channel-first tensors).
+        unet_fname_set (list[str]): List of file paths to U-Net checkpoints (.pth files).
+        device (torch.device): Device for model inference (e.g., 'cuda').
+        output_folder (str): Directory to save PDF plots (files named 'increment_image-{idx}.pdf').
+        unet_size (int): Input size parameter for U-Net architecture.
+
+    Returns:
+        None. Saves 16 PDF files to output_folder.
+
+    Note:
+        - Assumes external `make_unet` function builds the U-Net with size=unet_size,
+          attention=False, base_channels=2, noise_channels=2.
+        - Outputs use final layer of U-Net: unet(source)[-1].
+        - Handles 3-channel (RGB) images by transposing to HWC for imshow.
+        - Memory-efficient: deletes each model after use.
+    """
+
     for x,y,_ in dataloader:
         target = x[:16]
         source = y[:16].to(device)

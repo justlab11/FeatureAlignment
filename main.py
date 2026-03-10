@@ -258,6 +258,13 @@ def main(config_fname):
         norm_size=norm_size
     )
 
+    init_plots_file: str = f"{IMAGE_FOLDER}/INIT_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
+    plotters.plot_dataset_examples(
+        dataset=train_ds,
+        filename=init_plots_file,
+        device=DEVICE
+    )
+
     logger.info("TRAINING CLASSIFIERS")
     logger.info("--------------------")
 
@@ -372,7 +379,7 @@ def main(config_fname):
         model_name=CONFIG.classifier.model,
         num_classes=TARGET_NUM_CLASSES
     )
-    
+
     unet = build_unet()
 
     contrast_model_trainer = trainer.FullTrainer(
@@ -400,7 +407,8 @@ def main(config_fname):
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     contrast_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
+    if CONFIG.classifier.train_baseline:
+        logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
 
     _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Base Model Accuracy: {round(base_acc*100, 2)}%")
@@ -515,7 +523,6 @@ def main(config_fname):
         filename=contrast_example_file,
         device=DEVICE
     )
-
 
     logger.info("\nGenerating TSNE w/ UNET Plot")
     tsne_plot_file = f"{IMAGE_FOLDER}/TSNE_UNET_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
