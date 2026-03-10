@@ -444,23 +444,27 @@ class DynamicResNet(nn.Module):
 
         self.body_output_size = self.model.fc.in_features
 
+        self._layer_outputs = []
+        self._hooks = []
+        self._register_hooks()
+
     def set_freeze_head(self, freeze: bool):
-        self.freeze_head = freeze
-        for param in self.model.fc.parameters():
-            param.requires_grad = not freeze
         if freeze and self.freeze_body:
             logger.error("Cannot freeze both head and body simultaneously.")
             raise ValueError("Cannot freeze both head and body simultaneously.")
+        self.freeze_head = freeze
+        for param in self.model.fc.parameters():
+            param.requires_grad = not freeze
 
     def set_freeze_body(self, freeze: bool):
-        self.freeze_body = freeze
-        for name, param in self.model.named_parameters():
-            if "fc" not in name:  # Freeze all layers except the final fully connected layer
-                param.requires_grad = not freeze
         if freeze and self.freeze_head:
             logger.error("Cannot freeze both head and body simultaneously.")
             raise ValueError("Cannot freeze both head and body simultaneously.")
-        
+        self.freeze_body = freeze
+        for name, param in self.model.named_parameters():
+            if "fc" not in name:
+                param.requires_grad = not freeze
+
     def get_body_output_size(self):
         return self.body_output_size
     
@@ -482,31 +486,34 @@ class DynamicResNet(nn.Module):
             if self.model.fc.bias is not None:
                 nn.init.zeros_(self.model.fc.bias)
 
-    def forward(self, x):
-        layer_outputs = [x]
+    def _hook_fn(self, module, input, output):
+        if self.freeze_body:
+            self._layer_outputs.append(output.detach())
+        else:
+            self._layer_outputs.append(output)
 
-        def hook_fn(module, input, output):
-            if self.freeze_body:
-                layer_outputs.append(output.detach())
-            else:
-                layer_outputs.append(output)
-
-        hooks = []
+    def _register_hooks(self):
         for name, module in self.model.named_children():
-            if name != 'fc':  # Don't add hook to the final layer
-                hooks.append(module.register_forward_hook(hook_fn))
+            if name != 'fc': # don't add hook to the final layer
+                self._hooks.append(
+                    module.register_forward_hook(self._hook_fn)
+                )
+
+    def remove_hooks(self):
+        for hook in self._hooks:
+            hook.remove()
+        self._hooks = []
+
+    def forward(self, x):
+        self._layer_outputs = [x] # reset each pass, keep input as first entry
 
         # Forward pass
         output = self.model(x)
 
-        # Remove hooks
-        for hook in hooks:
-            hook.remove()
-
         if not self.freeze_head:
-            layer_outputs.append(output)
+            self._layer_outputs.append(output)
 
-        return layer_outputs
+        return self._layer_outputs
     
     def get_num_layers(self):
         return len(list(self.model.children()))
@@ -689,11 +696,9 @@ class SmallAttentionUNET(nn.Module):
         )
     
     def get_normalized_weights(self):
-        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
-        return (
-            self.noise_weight.abs() / sum_weights,
-            self.latent_weight.abs() / sum_weights,
-        )
+        weights = torch.stack([self.noise_weight, self.latent_weight])
+        normed = torch.softmax(weights, dim=0)
+        return normed[0], normed[1]
 
     def forward(self, x):
         layer_outputs = []
@@ -749,7 +754,7 @@ class LargeCustomUNET(nn.Module):
     """
     Expects images of size 224x224
     """
-    def __init__(self, base_channels=32, noise_channels=8):
+    def __init__(self, base_channels=32, noise_channels=8, norm_size=8):
         super(LargeCustomUNET, self).__init__()
         
         self.base_channels = base_channels
@@ -763,7 +768,7 @@ class LargeCustomUNET(nn.Module):
         self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
         # Latent space normalization
-        self.latent_norm = nn.LayerNorm([base_channels * 16, 8, 8])  # Adjusted for latent space size (7x7 for 224x224 input)
+        self.latent_norm = nn.LayerNorm([base_channels * 16, norm_size, norm_size])  # Adjusted for latent space size (7x7 for 224x224 input)
 
         # Noise addition
         self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
@@ -792,11 +797,9 @@ class LargeCustomUNET(nn.Module):
         )
     
     def get_normalized_weights(self):
-        sum_weights = self.noise_weight.abs() + self.latent_weight.abs()
-        return (
-            self.noise_weight.abs() / sum_weights,
-            self.latent_weight.abs() / sum_weights,
-        )
+        weights = torch.stack([self.noise_weight, self.latent_weight])
+        normed = torch.softmax(weights, dim=0)
+        return normed[0], normed[1]
 
     def forward(self, x):
         layer_outputs = [x]
@@ -821,11 +824,10 @@ class LargeCustomUNET(nn.Module):
 
         noise = torch.randn(e5.size(0), self.noise_channels, e5.size(2), e5.size(3), device=e5.device)
         noise_transformed = self.noise_conv(noise).view_as(e5)
+        noise_transformed = F.layer_norm(noise_transformed, noise_transformed.shape[1:])
 
         norm_noise_weight, norm_latent_weight = self.get_normalized_weights()
-        
         e5_blended = e5_normalized * norm_latent_weight + noise_transformed * norm_noise_weight
-        e5_blended = self.latent_norm(e5_blended)
 
         # Decoder
         d4 = self.dec4(torch.cat([self.upsample(e5_blended), e4], dim=1))
@@ -1064,7 +1066,6 @@ class DynamicVGGBlockwise(nn.Module):
         self.avgpool = vgg.avgpool
 
         classifier_layers = list(vgg.classifier.children())[:-1]
-        classifier_layers.insert(4, nn.Dropout(p=0.5))
         self.classifier = nn.Sequential(*classifier_layers)
 
         #self.classifier = nn.Sequential(*list(vgg.classifier.children())[:-1])
@@ -1078,11 +1079,11 @@ class DynamicVGGBlockwise(nn.Module):
         self.freeze_body = False
 
     def set_freeze_head(self, freeze: bool):
+        if freeze and self.freeze_body:
+            raise ValueError("Cannot freeze both head and body simultaneously.")
         self.freeze_head = freeze
         for param in self.head.parameters():
             param.requires_grad = not freeze
-        if freeze and self.freeze_body:
-            raise ValueError("Cannot freeze both head and body simultaneously.")
 
     def set_freeze_body(self, freeze: bool):
         self.freeze_body = freeze

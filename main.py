@@ -83,14 +83,6 @@ def main(config_fname):
     for folder in [MODEL_FOLDER, FILE_FOLDER, IMAGE_FOLDER, log_folder]:
         os.makedirs(folder, exist_ok=True)
 
-    # function to build unet with given parameters
-    build_unet: Callable = helpers.make_unet(
-        size=CONFIG.dataset.image_size,
-        attention=CONFIG.unet.attention,
-        base_channels=CONFIG.unet.base_channels,
-        noise_channels=CONFIG.unet.noise_channels
-    )
-
     # enable reproducibility
     torch.manual_seed(RNG)
     torch.cuda.manual_seed(RNG)
@@ -256,7 +248,15 @@ def main(config_fname):
         logger.info(f"Input Shape: {INPUT_SHAPE}")
         break
 
-
+    # function to build unet with given parameters
+    norm_size = INPUT_SHAPE[-1] // 16 # 2**4
+    build_unet: Callable = helpers.build_unet(
+        size=CONFIG.dataset.image_size,
+        attention=CONFIG.unet.attention,
+        base_channels=CONFIG.unet.base_channels,
+        noise_channels=CONFIG.unet.noise_channels,
+        norm_size=norm_size
+    )
 
     logger.info("TRAINING CLASSIFIERS")
     logger.info("--------------------")
@@ -305,18 +305,10 @@ def main(config_fname):
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    if "resnet" in CONFIG.classifier.model:
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    elif "vgg" in CONFIG.classifier.model:
-        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    else:
-        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
+    model = helpers.build_classifier(
+        model_name=CONFIG.classifier.model,
+        num_classes=TARGET_NUM_CLASSES
+    )
 
     unet = build_unet()
 
@@ -344,19 +336,10 @@ def main(config_fname):
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    if "resnet" in CONFIG.classifier.model:
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    elif "vgg" in CONFIG.classifier.model:
-        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    else:
-        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
-
+    model = helpers.build_classifier(
+        model_name=CONFIG.classifier.model,
+        num_classes=TARGET_NUM_CLASSES
+    )
 
     unet = build_unet()
 
@@ -385,19 +368,11 @@ def main(config_fname):
     contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
 
-    if "resnet" in CONFIG.classifier.model:
-        model: models.DynamicResNet = models.DynamicResNet(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    elif "vgg" in CONFIG.classifier.model:
-        model: models.DynamicVGGBlockwise = models.DynamicVGGBlockwise(
-            resnet_type=CONFIG.classifier.model,
-            num_classes=TARGET_NUM_CLASSES,
-        )
-    else:
-        raise ValueError("Invalid model used in the config's `classifier.model` parameter.")
-
+    model = helpers.build_classifier(
+        model_name=CONFIG.classifier.model,
+        num_classes=TARGET_NUM_CLASSES
+    )
+    
     unet = build_unet()
 
     contrast_model_trainer = trainer.FullTrainer(
@@ -511,7 +486,8 @@ def main(config_fname):
 
     logger.info("\nGetting Model Accuracy With UNET Models")
 
-    logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
+    if CONFIG.classifier.train_baseline:
+        logger.info(f"Baseline Model Accuracy: {round(baseline_acc*100, 2)}%")
 
     _, base_acc = base_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Base Model Accuracy w/ UNET: {round(base_acc*100, 2)}%")

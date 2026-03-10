@@ -4,6 +4,7 @@ import pillow_heif
 import glob
 from PIL import Image
 import os
+import random
 from typing import List
 
 # Register HEIC opener
@@ -82,13 +83,13 @@ class CombinedDataset(Dataset):
         # Get all aux indices for this label
         class_name = self.idx_to_class[label]
         source_indices = self.source_class_samples[class_name]
-        source_sample_path = np.random.choice(source_indices)
+        source_sample_path = random.choice(source_indices)
 
         with Image.open(target_image_path) as img:
-            target_image = img.copy()
+            target_image = img.convert("RGB")
 
         with Image.open(source_sample_path) as img:
-            source_image = img.copy()
+            source_image = img.convert("RGB")
 
         if self.transform is not None:
             source_image = self.transform(source_image)

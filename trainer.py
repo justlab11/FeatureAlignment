@@ -60,6 +60,7 @@ class ClassifierTrainer:
             nn.ReLU(),
             nn.Linear(128, 64)
         )
+        self.criterion = nn.CrossEntropyLoss()
 
     def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_alignment=False):
         """
@@ -77,8 +78,6 @@ class ClassifierTrainer:
         - Average loss for the epoch
         - Accuracy for the epoch (for classification) or None (for contrastive)
         """
-
-        criterion = nn.CrossEntropyLoss()
         self.classifier.to(device)
 
         if train:
@@ -107,7 +106,7 @@ class ClassifierTrainer:
             with torch.set_grad_enabled(train):
                 if target_only:
                     outputs = self.classifier(target_samples)[-1]
-                    loss = criterion(outputs, labels)
+                    loss = self.criterion(outputs, labels)
                     
                     _, predicted = outputs.max(1)
                     total += labels.size(0)
@@ -121,7 +120,7 @@ class ClassifierTrainer:
                     inputs = torch.cat((target_samples, source_samples), 0)
 
                     outputs = self.classifier(inputs)[-1]
-                    loss = criterion(outputs, labels.repeat(2))
+                    loss = self.criterion(outputs, labels.repeat(2))
                     
                     _, predicted = outputs.max(1)
                     total += labels.size(0) * 2
@@ -178,6 +177,7 @@ class ClassifierTrainer:
                 torch.ones(len(source_samples)),
             ]).long()
             group_labels = group_labels.reshape(1, -1)
+            group_labels = group_labels.to(device)
             target_samples, source_samples, labels = (
                 target_samples.to(device),
                 source_samples.to(device), 
@@ -288,7 +288,7 @@ class ClassifierTrainer:
         """
         
         # Step 1: Optimize temperature and train body
-        if best_temp == None:
+        if best_temp is None:
             best_temp, best_val_loss = self._optimize_temperature(temp_range, device, filename, num_epochs)
         
             logger.info(f"\tBest temperature: {best_temp:.4f}, Best validation loss: {best_val_loss:.4f}")
@@ -302,7 +302,7 @@ class ClassifierTrainer:
         
         # Train the head
         head_filename = filename.replace('body', 'full')
-        self.classification_train_loop(head_filename, device, num_epochs=100)
+        self.classification_train_loop(head_filename, device, num_epochs=num_epochs)
         
         # Optionally, unfreeze everything for potential fine-tuning
         self.classifier.set_freeze_head(False)
@@ -326,16 +326,17 @@ class ClassifierTrainer:
             float: Best validation loss achieved during training.
         """
 
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
+        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-4, momentum=.9, 
                               nesterov=True, weight_decay=1e-2)
 
         scheduler = CosineAnnealingWarmRestarts(
             optimizer=optimizer,
-            T_0=20,
+            T_0=50,
             T_mult=1,
             eta_min=1e-8
         )
 
+        best_val_acc = 0
         best_val_loss = 1e7
 
         self.classifier.to(device)
@@ -377,8 +378,9 @@ class ClassifierTrainer:
 
             log_message = f"\tEpoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}, Test - {test_loss:.4f} {test_acc*100:.2f}"
 
-            if val_loss < best_val_loss:
+            if val_acc > best_val_acc:
                 log_message += " <- New Best"
+                best_val_acc = val_acc
                 best_val_loss = val_loss
                 torch.save(self.classifier.state_dict(), classifier_filename)
 
@@ -581,8 +583,6 @@ class AlignmentTrainer:
         self.alignment_model.load_state_dict(torch.load(alignment_fname, weights_only=True)) 
 
         return best_val
-    
-
 
 class FullTrainer:
     def __init__(
@@ -621,7 +621,7 @@ class FullTrainer:
             dataloaders=self.classifier_dataloaders,
         )
 
-        self.alignment_trainer: ClassifierTrainer = AlignmentTrainer(
+        self.alignment_trainer: AlignmentTrainer = AlignmentTrainer(
             classifier=self.classifier,
             alignment_model=self.alignment_model,
             dataloaders=self.alignment_dataloaders,
@@ -795,6 +795,7 @@ class FullTrainer:
         inter_layer_distances = np.array(inter_layer_distances)
         intra_layer_distances = np.array(intra_layer_distances)
         classifier_val_accs = np.array(classifier_val_accs)
+        classifier_test_accs = np.array(classifier_test_accs)
 
         model_name: str = self.classifier_name
         inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
@@ -819,7 +820,6 @@ class FullTrainer:
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
 
-        best_layer_val_loss = 1e7
         best_layer_val_acc = 0
 
         best_layer_test_loss = 1e7
@@ -882,7 +882,7 @@ class FullTrainer:
         intra_layer_distances.append(intra)
 
         for i in range(1, num_layers+1):
-            layer_set: List[int] = layers[-i]
+            layer_set: List[int] = list(layers[-i])
             logger.info(f"COVERING LAYERS: {layer_set}\n")
             start_layer: int = layer_set[0]
             classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"

@@ -3,6 +3,7 @@ from functools import partial
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 def fully_supervised_contrastive_loss(features, labels, group_labels, temperature):
     """
     Compute the supervised contrastive loss
@@ -138,7 +139,7 @@ class SlicedWasserstein(torch.nn.Module):
 
 def rand_projections(dim, num_projections=1000,device='cpu'):
     projections = torch.randn((num_projections, dim),device=device)
-    projections = projections / torch.sqrt(torch.sum(projections ** 2, dim=1, keepdim=True))
+    projections = projections / torch.sqrt(torch.sum(projections ** 2, dim=1, keepdim=True).clamp(min=1e-8))
     return projections
 
 class DSW(torch.nn.Module):
@@ -248,11 +249,6 @@ def ISEBSW(X, Y, L=256, p=2, device="cpu"):
     weights = torch.softmax(wasserstein_distances,dim=1)
     sw = torch.sum(weights*wasserstein_distances,dim=1).mean()
     return  torch.pow(sw,1./p)
-
-import torch
-from functools import partial
-import torch.nn as nn
-import torch.nn.functional as F
 
 def mmdfuse(
     X,

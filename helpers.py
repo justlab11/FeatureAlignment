@@ -8,7 +8,7 @@ import os
 from sklearn.model_selection import train_test_split
 from collections import Counter
 
-from models import SmallCustomUNET, LargeCustomUNET, SmallAttentionUNET, LargeAttentionUNET
+import models
 
 logger = logging.getLogger(__name__)
 
@@ -67,34 +67,42 @@ def load_yaml(file_path: str):
         data = yaml.safe_load(file)
     return data
 
-def make_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8):
+def build_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8, norm_size:int=8):
     def unet():
         if size == "small" and attention:
-            model = SmallAttentionUNET(
+            model = models.SmallAttentionUNET(
                 base_channels=base_channels,
                 noise_channels=noise_channels
             )
         elif size == "small" and not attention:
-            model = SmallCustomUNET(
+            model = models.SmallCustomUNET(
                 base_channels=base_channels,
                 noise_channels=noise_channels
             ) 
 
         elif size == "large" and attention:
-            model = LargeAttentionUNET(
+            model = models.LargeAttentionUNET(
                 base_channels=base_channels,
                 noise_channels=noise_channels
             )
 
         elif size == "large" and not attention:
-            model = LargeCustomUNET(
+            model = models.LargeCustomUNET(
                 base_channels=base_channels,
-                noise_channels=noise_channels
+                noise_channels=noise_channels,
+                norm_size=norm_size
             )
 
         return model
     
     return unet
+
+def build_classifier(model_name, num_classes):
+    if "resnet" in model_name:
+        return models.DynamicResNet(resnet_type=model_name, num_classes=num_classes)
+    elif "vgg" in model_name:
+        return models.DynamicVGGBlockwise(num_classes=num_classes)
+    raise ValueError("Invalid model in config's `classifier.model` parameter.")
 
 def compute_layer_loss(base_reps: List[torch.tensor], aux_reps: List[torch.tensor], labels: torch.tensor, layer: int, criterion, device: str):
     # reshape arrays 
@@ -108,7 +116,7 @@ def compute_layer_loss(base_reps: List[torch.tensor], aux_reps: List[torch.tenso
         aux_normed = F.softmax(aux_reshaped, dim=1)
     else:  # Intermediate layers
         # compare against latent representations
-        base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True)
-        aux_normed = aux_reshaped / torch.norm(aux_reshaped, dim=1, keepdim=True)
+        base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True).clamp(min=1e-8)
+        aux_normed = aux_reshaped / torch.norm(aux_reshaped, dim=1, keepdim=True).clamp(min=1e-8)
 
     return criterion(base_normed, aux_normed, device=device)
