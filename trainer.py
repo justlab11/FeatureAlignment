@@ -332,7 +332,7 @@ class ClassifierTrainer:
 
         scheduler = CosineAnnealingWarmRestarts(
             optimizer=optimizer,
-            T_0=50,
+            T_0=20,
             T_mult=1,
             eta_min=1e-8
         )
