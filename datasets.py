@@ -4,10 +4,13 @@ import pillow_heif
 import glob
 from PIL import Image
 import os
+import logging
 from typing import List
 
 # Register HEIC opener
 pillow_heif.register_heif_opener()
+
+logger = logging.getLogger(__name__)
 
 class CombinedDataset(Dataset):
     def __init__(self, data_folder: str, target_split_samples: List[str], source_split_samples: List[str], transform=None):
@@ -29,6 +32,7 @@ class CombinedDataset(Dataset):
         self._populate_samples(
             split_samples=source_split_samples, domain="source"
         )
+        self._validate_and_log_classes()
 
     def get_class_folders(self, root_dir):
         result = []
@@ -66,6 +70,27 @@ class CombinedDataset(Dataset):
                 (sample_path, self.class_to_idx[class_name])
             )
 
+    def _validate_and_log_classes(self):
+        logger.info(
+            f"Loaded {len(self.class_to_idx)} classes -- "
+            f"target samples: {len(self.target_samples)}, source samples: {len(self.source_samples)}"
+        )
+
+        empty_source_classes = []
+        for class_name in self.class_to_idx:
+            target_count = len(self.target_class_samples[class_name])
+            source_count = len(self.source_class_samples[class_name])
+            logger.debug(f"\tClass '{class_name}': target={target_count}, source={source_count}")
+
+            if source_count == 0:
+                empty_source_classes.append(class_name)
+
+        if empty_source_classes:
+            raise ValueError(
+                f"The following classes have zero source samples, which would break "
+                f"random source sampling in __getitem__: {empty_source_classes}"
+            )
+
     def get_target_size(self):
         return len(self.target_samples)
     
@@ -75,6 +100,14 @@ class CombinedDataset(Dataset):
     def __len__(self):
         return len(self.target_samples)
     
+    def _load_image(self, image_path: str):
+        try:
+            with Image.open(image_path) as img:
+                return img.copy()
+        except Exception:
+            logger.error(f"Failed to load image at {image_path}")
+            raise
+
     def __getitem__(self, index: int):
         # Get base image and label
         target_image_path, label = self.target_samples[index]
@@ -84,11 +117,8 @@ class CombinedDataset(Dataset):
         source_indices = self.source_class_samples[class_name]
         source_sample_path = np.random.choice(source_indices)
 
-        with Image.open(target_image_path) as img:
-            target_image = img.copy()
-
-        with Image.open(source_sample_path) as img:
-            source_image = img.copy()
+        target_image = self._load_image(target_image_path)
+        source_image = self._load_image(source_sample_path)
 
         if self.transform is not None:
             source_image = self.transform(source_image)

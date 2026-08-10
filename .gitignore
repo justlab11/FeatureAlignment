@@ -13,3 +13,4 @@ logs
 main_unet.py
 unet_work.ipynb
 configs/META_test.yaml
+venv_fixed

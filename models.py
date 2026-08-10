@@ -510,7 +510,10 @@ class DynamicResNet(nn.Module):
         return layer_outputs
     
     def get_num_layers(self):
-        return len(list(self.model.children()))
+        # forward() prepends the raw input and appends the final (unfrozen) head
+        # output to the per-child hook outputs, so the true layer count is the
+        # number of children plus one, not just the number of children.
+        return len(list(self.model.children())) + 1
 
     
 class SmallCustomUNET(nn.Module):

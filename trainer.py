@@ -7,16 +7,25 @@ from os import path
 import logging
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 import gc
+import os
 from typing import List
+from tqdm import tqdm
 
 from models import DynamicCNN
 from losses import supervised_contrastive_loss, ISEBSW, mmdfuse, fully_supervised_contrastive_loss
 from datasets import CombinedDataset
 from type_defs import DataLoaderSet
-from helpers import compute_layer_loss
-from plotters import plot_examples, EBSW_Plotter, divergence_plots
+from helpers import compute_layer_loss, append_metrics_row
+from plotters import plot_examples, EBSW_Plotter, divergence_plots, accuracy_vs_divergence_scatter
 
 logger = logging.getLogger(__name__)
+
+# optional epoch cap for fast smoke-testing (see scripts/smoke_test); unset by
+# default so real runs are unaffected
+_EPOCH_CAP = int(os.environ["FEATUREALIGNMENT_EPOCH_CAP"]) if "FEATUREALIGNMENT_EPOCH_CAP" in os.environ else None
+
+def _capped_epochs(num_epochs: int) -> int:
+    return min(num_epochs, _EPOCH_CAP) if _EPOCH_CAP else num_epochs
 
 class ClassifierTrainer:
     """
@@ -93,7 +102,7 @@ class ClassifierTrainer:
         correct = 0
         total = 0
         
-        for target_samples, source_samples, labels in dataloader:
+        for target_samples, source_samples, labels in tqdm(dataloader, desc="Train" if train else "Eval", leave=False):
             labels = labels.long()
             target_samples, source_samples, labels = (
                 target_samples.to(device), 
@@ -171,7 +180,7 @@ class ClassifierTrainer:
         self.alignment_model.to(device)
         self.alignment_model.eval()
         
-        for target_samples, source_samples, labels in dataloader:
+        for target_samples, source_samples, labels in tqdm(dataloader, desc="Train" if train else "Eval", leave=False):
             labels = labels.long()
             group_labels = torch.cat([
                 torch.zeros(len(target_samples)),
@@ -302,7 +311,7 @@ class ClassifierTrainer:
         
         # Train the head
         head_filename = filename.replace('body', 'full')
-        self.classification_train_loop(head_filename, device, num_epochs=100)
+        self.classification_train_loop(head_filename, device, num_epochs=_capped_epochs(100))
         
         # Optionally, unfreeze everything for potential fine-tuning
         self.classifier.set_freeze_head(False)
@@ -383,6 +392,17 @@ class ClassifierTrainer:
                 torch.save(self.classifier.state_dict(), classifier_filename)
 
             logger.info(log_message)
+            append_metrics_row(path.splitext(classifier_filename)[0] + "_metrics.csv", {
+                "epoch": epoch + 1,
+                "lr": current_lr,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "test_loss": test_loss,
+                "test_acc": test_acc,
+                "best_val_loss": best_val_loss,
+            })
         
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
@@ -492,7 +512,7 @@ class AlignmentTrainer:
             self.alignment_model.train()
             train_loss = 0
 
-            for target_samples, source_samples, labels in self.train_loader:
+            for target_samples, source_samples, labels in tqdm(self.train_loader, desc=f"Align Train (layers {layers})", leave=False):
                 labels = labels.long()
 
                 target_samples, source_samples, labels = (
@@ -519,10 +539,12 @@ class AlignmentTrainer:
                     if param.grad is not None:
                         if torch.isnan(param.grad).any():
                             print(f"NaN detected in gradient of {name}")
+                            logger.error(f"NaN detected in gradient of {name} at epoch {epoch+1}")
                             alignment_nan = True
                             break
                         if torch.isinf(param.grad).any():
                             print(f"Inf detected in gradient of {name}")
+                            logger.error(f"Inf detected in gradient of {name} at epoch {epoch+1}")
                             alignment_nan = True
                             break
 
@@ -539,12 +561,13 @@ class AlignmentTrainer:
 
             alignment_scheduler.step()
             if alignment_nan:
+                logger.error(f"Aborting alignment training at epoch {epoch+1} due to NaN/Inf gradients.")
                 alignment_nan = False
                 break
 
             self.alignment_model.eval()
             val_loss = 0
-            for target_samples, source_samples, labels in self.val_loader:
+            for target_samples, source_samples, labels in tqdm(self.val_loader, desc=f"Align Val (layers {layers})", leave=False):
                 labels = labels.long()
 
                 target_samples, source_samples, labels = (
@@ -577,6 +600,12 @@ class AlignmentTrainer:
                 torch.save(self.alignment_model.state_dict(), alignment_fname)
 
             logger.info(log_message)
+            append_metrics_row(path.splitext(alignment_fname)[0] + "_metrics.csv", {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "best_val_loss": best_val,
+            })
         
         self.alignment_model.load_state_dict(torch.load(alignment_fname, weights_only=True)) 
 
@@ -628,6 +657,56 @@ class FullTrainer:
             alignment_loss=self.alignment_loss
         )
 
+    def _save_layer_sweep_outputs(self, mode, inter_layer_distances, intra_layer_distances,
+                                   classifier_val_accs, classifier_test_accs, layer_set_labels):
+        """
+        Saves the raw arrays, divergence/scatter plots, and a per-layer-set summary CSV from a
+        cascading/single-layer sweep. `mode` ("cascading"/"single_layer") is baked into every
+        output filename so the two sweep types never overwrite each other's results.
+        """
+        model_name: str = f"{self.classifier_name}-{mode}"
+        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
+        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
+        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
+        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
+        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
+        scatter_fname: str = path.join(self.file_folder, f"{model_name}-accuracy_vs_divergence.pdf")
+        summary_csv_fname: str = path.join(self.file_folder, f"{model_name}-layer_summary.csv")
+
+        np.save(val_fname, classifier_val_accs)
+        np.save(test_fname, classifier_test_accs)
+        np.save(inter_fname, inter_layer_distances)
+        np.save(intra_fname, intra_layer_distances)
+
+        divergence_plots(
+            inter_data=inter_layer_distances,
+            intra_data=intra_layer_distances,
+            val_acc_values=classifier_val_accs,
+            fname=div_plots_fname
+        )
+
+        accuracy_vs_divergence_scatter(
+            inter_data=inter_layer_distances,
+            val_acc_values=classifier_val_accs,
+            fname=scatter_fname
+        )
+
+        # a CSV twin of the above so the plots can be rebuilt without re-running training
+        for idx, layer_label in enumerate(layer_set_labels):
+            row = {
+                "layer_set": layer_label,
+                "val_acc": float(classifier_val_accs[idx]),
+                "test_acc": float(classifier_test_accs[idx]),
+                "mean_inter_divergence": float(inter_layer_distances[idx + 1].mean()),
+                "mean_intra_divergence": float(intra_layer_distances[idx + 1].mean()),
+            }
+            for layer_idx in range(inter_layer_distances.shape[2]):
+                row[f"inter_divergence_layer{layer_idx}"] = float(inter_layer_distances[idx + 1, :, layer_idx].mean())
+                row[f"intra_divergence_layer{layer_idx}"] = float(intra_layer_distances[idx + 1, :, layer_idx].mean())
+            append_metrics_row(summary_csv_fname, row)
+
+        logger.info(f"Saved layer-sweep outputs under {self.file_folder} as '{model_name}-*'")
+
     def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
@@ -644,6 +723,7 @@ class FullTrainer:
         intra_layer_distances = []
         classifier_val_accs = []
         classifier_test_accs = []
+        layer_set_labels = []
 
         ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
             dataloaders=self.alignment_dataloaders,
@@ -651,8 +731,9 @@ class FullTrainer:
         )
 
         # calculate divergence performance before any alignment
+        # "intra" = within-domain (target vs target), "inter" = cross-domain (target vs source)
         if self.alignment_loss == "ebsw":
-            inter = ebsw_plotter.run_isebsw(
+            intra = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -662,7 +743,7 @@ class FullTrainer:
                 num_projections=256
             )
 
-            intra = ebsw_plotter.run_isebsw(
+            inter = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -673,7 +754,7 @@ class FullTrainer:
             )
 
         else:
-            inter = ebsw_plotter.run_mmdfuse(
+            intra = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -682,7 +763,7 @@ class FullTrainer:
                 alignment_model=None,
             )
 
-            intra = ebsw_plotter.run_mmdfuse(
+            inter = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -697,17 +778,22 @@ class FullTrainer:
         for i in range(1, num_layers+1):
             layer_set: List[int] = layers[-i:]
             logger.info(f"COVERING LAYERS: {layer_set}\n")
+            layer_set_labels.append(str(layer_set))
             start_layer: int = layer_set[0]
             classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"
             alignment_layer_fname: str = path.splitext(alignment_fname)[0] + f"-{start_layer}.pt"
             alignment_layer_examples_fname: str = path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
 
-            alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
-                layers=layer_set,
-                device=device,
-                alignment_fname=alignment_layer_fname,
-                epochs=num_epochs
-            )
+            if path.exists(alignment_layer_fname):
+                logger.info(f"Found existing alignment checkpoint for layers {layer_set}, skipping alignment training: {alignment_layer_fname}")
+                self.alignment_model.load_state_dict(torch.load(alignment_layer_fname, weights_only=True))
+            else:
+                alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
+                    layers=layer_set,
+                    device=device,
+                    alignment_fname=alignment_layer_fname,
+                    epochs=num_epochs
+                )
 
             plot_examples(
                 dataset=self.classifier_dataloaders.val_loader.dataset,
@@ -716,15 +802,19 @@ class FullTrainer:
                 device=device
             )
 
-            _ = self.classifier_trainer.classification_train_loop(
-                classifier_filename=classifier_layer_fname,
-                device=device,
-                num_epochs=num_epochs,
-                use_alignment=True,
-            )
+            if path.exists(classifier_layer_fname):
+                logger.info(f"Found existing classifier checkpoint for layers {layer_set}, skipping classifier training: {classifier_layer_fname}")
+                self.classifier.load_state_dict(torch.load(classifier_layer_fname, weights_only=True))
+            else:
+                _ = self.classifier_trainer.classification_train_loop(
+                    classifier_filename=classifier_layer_fname,
+                    device=device,
+                    num_epochs=num_epochs,
+                    use_alignment=True,
+                )
 
             if self.alignment_loss == "ebsw":
-                inter = ebsw_plotter.run_isebsw(
+                intra = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -734,7 +824,7 @@ class FullTrainer:
                     num_projections=256
                 )
 
-                intra = ebsw_plotter.run_isebsw(
+                inter = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -745,7 +835,7 @@ class FullTrainer:
                 )
 
             else:
-                inter = ebsw_plotter.run_mmdfuse(
+                intra = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -754,7 +844,7 @@ class FullTrainer:
                     alignment_model=self.alignment_model,
                 )
 
-                intra = ebsw_plotter.run_mmdfuse(
+                inter = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -785,6 +875,13 @@ class FullTrainer:
                 
                 best_layer: int = start_layer
 
+        if best_layer is None:
+            logger.error(
+                f"No layer set improved on the initial validation accuracy of {best_layer_val_acc*100:.2f}%; "
+                "skipping best-checkpoint reload and divergence plot."
+            )
+            return
+
         logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
         classifier_best_fname: str = classifier_fname[:-3] + f"-{best_layer}.pt"
         alignment_best_fname: str = alignment_fname[:-3] + f"-{best_layer}.pt"
@@ -796,23 +893,13 @@ class FullTrainer:
         intra_layer_distances = np.array(intra_layer_distances)
         classifier_val_accs = np.array(classifier_val_accs)
 
-        model_name: str = self.classifier_name
-        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
-        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
-        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
-        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
-
-        np.save(val_fname, classifier_val_accs)
-        np.save(test_fname, classifier_test_accs)
-        np.save(inter_fname, inter_layer_distances)
-        np.save(intra_fname, intra_layer_distances)
-
-        divergence_plots(
-            inter_data=inter_layer_distances,
-            intra_data=intra_layer_distances,
-            val_acc_values=classifier_val_accs,
-            fname=div_plots_fname
+        self._save_layer_sweep_outputs(
+            mode="cascading",
+            inter_layer_distances=inter_layer_distances,
+            intra_layer_distances=intra_layer_distances,
+            classifier_val_accs=classifier_val_accs,
+            classifier_test_accs=classifier_test_accs,
+            layer_set_labels=layer_set_labels,
         )
 
     def single_layer_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
@@ -831,6 +918,7 @@ class FullTrainer:
         intra_layer_distances = []
         classifier_val_accs = []
         classifier_test_accs = []
+        layer_set_labels = []
 
         ebsw_plotter: EBSW_Plotter = EBSW_Plotter(
             dataloaders=self.alignment_dataloaders,
@@ -838,8 +926,9 @@ class FullTrainer:
         )
 
         # calculate divergence performance before any alignment
+        # "intra" = within-domain (target vs target), "inter" = cross-domain (target vs source)
         if self.alignment_loss == "ebsw":
-            inter = ebsw_plotter.run_isebsw(
+            intra = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -849,7 +938,7 @@ class FullTrainer:
                 num_projections=256
             )
 
-            intra = ebsw_plotter.run_isebsw(
+            inter = ebsw_plotter.run_isebsw(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -860,7 +949,7 @@ class FullTrainer:
             )
 
         else:
-            inter = ebsw_plotter.run_mmdfuse(
+            intra = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -869,7 +958,7 @@ class FullTrainer:
                 alignment_model=None,
             )
 
-            intra = ebsw_plotter.run_mmdfuse(
+            inter = ebsw_plotter.run_mmdfuse(
                 model=self.classifier,
                 dataloader=self.alignment_dataloaders.val_loader,
                 layers=[j for j in range(num_layers-1)],
@@ -882,19 +971,24 @@ class FullTrainer:
         intra_layer_distances.append(intra)
 
         for i in range(1, num_layers+1):
-            layer_set: List[int] = layers[-i]
+            layer_set: List[int] = [layers[-i]]
             logger.info(f"COVERING LAYERS: {layer_set}\n")
+            layer_set_labels.append(str(layer_set))
             start_layer: int = layer_set[0]
             classifier_layer_fname: str = path.splitext(classifier_fname)[0] + f"-{start_layer}.pt"
             alignment_layer_fname: str = path.splitext(alignment_fname)[0] + f"-{start_layer}.pt"
             alignment_layer_examples_fname: str = path.splitext(examples_fname)[0] + f"-{start_layer}.pdf"
 
-            alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
-                layers=layer_set,
-                device=device,
-                alignment_fname=alignment_layer_fname,
-                epochs=num_epochs
-            )
+            if path.exists(alignment_layer_fname):
+                logger.info(f"Found existing alignment checkpoint for layers {layer_set}, skipping alignment training: {alignment_layer_fname}")
+                self.alignment_model.load_state_dict(torch.load(alignment_layer_fname, weights_only=True))
+            else:
+                alignment_val: float = self.alignment_trainer.cascade_alignment_train_loop(
+                    layers=layer_set,
+                    device=device,
+                    alignment_fname=alignment_layer_fname,
+                    epochs=num_epochs
+                )
 
             plot_examples(
                 dataset=self.classifier_dataloaders.val_loader.dataset,
@@ -903,15 +997,19 @@ class FullTrainer:
                 device=device
             )
 
-            _ = self.classifier_trainer.classification_train_loop(
-                classifier_filename=classifier_layer_fname,
-                device=device,
-                num_epochs=num_epochs,
-                use_alignment=True,
-            )
+            if path.exists(classifier_layer_fname):
+                logger.info(f"Found existing classifier checkpoint for layers {layer_set}, skipping classifier training: {classifier_layer_fname}")
+                self.classifier.load_state_dict(torch.load(classifier_layer_fname, weights_only=True))
+            else:
+                _ = self.classifier_trainer.classification_train_loop(
+                    classifier_filename=classifier_layer_fname,
+                    device=device,
+                    num_epochs=num_epochs,
+                    use_alignment=True,
+                )
 
             if self.alignment_loss == "ebsw":
-                inter = ebsw_plotter.run_isebsw(
+                intra = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -921,7 +1019,7 @@ class FullTrainer:
                     num_projections=256
                 )
 
-                intra = ebsw_plotter.run_isebsw(
+                inter = ebsw_plotter.run_isebsw(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -932,7 +1030,7 @@ class FullTrainer:
                 )
 
             else:
-                inter = ebsw_plotter.run_mmdfuse(
+                intra = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -941,7 +1039,7 @@ class FullTrainer:
                     alignment_model=self.alignment_model,
                 )
 
-                intra = ebsw_plotter.run_mmdfuse(
+                inter = ebsw_plotter.run_mmdfuse(
                     model=self.classifier,
                     dataloader=self.alignment_dataloaders.val_loader,
                     layers=[j for j in range(num_layers-1)],
@@ -972,6 +1070,13 @@ class FullTrainer:
                 
                 best_layer: int = start_layer
 
+        if best_layer is None:
+            logger.error(
+                f"No layer set improved on the initial validation accuracy of {best_layer_val_acc*100:.2f}%; "
+                "skipping best-checkpoint reload and divergence plot."
+            )
+            return
+
         logger.info(f"Best Performing Layer Set: {best_layer}-{num_layers-1} : {best_layer_test_loss} | {best_layer_test_acc*100:.4f} ")
         classifier_best_fname: str = classifier_fname[:-3] + f"-{best_layer}.pt"
         alignment_best_fname: str = alignment_fname[:-3] + f"-{best_layer}.pt"
@@ -983,23 +1088,13 @@ class FullTrainer:
         intra_layer_distances = np.array(intra_layer_distances)
         classifier_val_accs = np.array(classifier_val_accs)
 
-        model_name: str = self.classifier_name
-        inter_fname: str = path.join(self.file_folder, f"{model_name}-inter_layer_distances.npy")
-        intra_fname: str = path.join(self.file_folder, f"{model_name}-intra_layer_distances.npy")
-        val_fname: str = path.join(self.file_folder, f"{model_name}-classifier_val_accs.npy")
-        test_fname: str = path.join(self.file_folder, f"{model_name}-classifier_test_accs.npy")
-        div_plots_fname: str = path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
-
-        np.save(val_fname, classifier_val_accs)
-        np.save(test_fname, classifier_test_accs)
-        np.save(inter_fname, inter_layer_distances)
-        np.save(intra_fname, intra_layer_distances)
-
-        divergence_plots(
-            inter_data=inter_layer_distances,
-            intra_data=intra_layer_distances,
-            val_acc_values=classifier_val_accs,
-            fname=div_plots_fname
+        self._save_layer_sweep_outputs(
+            mode="single_layer",
+            inter_layer_distances=inter_layer_distances,
+            intra_layer_distances=intra_layer_distances,
+            classifier_val_accs=classifier_val_accs,
+            classifier_test_accs=classifier_test_accs,
+            layer_set_labels=layer_set_labels,
         )
 
 class PreloaderTrainer:
@@ -1037,7 +1132,7 @@ class PreloaderTrainer:
         autoencoder.eval()
         running_loss = 0.0
 
-        for target_samples, source_samples, _ in dataloader: 
+        for target_samples, source_samples, _ in tqdm(dataloader, desc="Train" if train else "Eval", leave=False):
             target_samples, source_samples = target_samples.to(device), source_samples.to(device)
 
             if train:
@@ -1097,7 +1192,7 @@ class PreloaderTrainer:
         correct = 0
         total = 0
         
-        for target_samples, source_samples, labels in dataloader:
+        for target_samples, source_samples, labels in tqdm(dataloader, desc="Train" if train else "Eval", leave=False):
             labels = labels.long()
             target_samples, source_samples, labels = (
                 target_samples.to(device), 
@@ -1147,11 +1242,15 @@ class PreloaderTrainer:
             logger.error("No autoencoder found in trainer")
             raise ValueError("No autoencoder found in trainer")
 
+        if train_both and path.exists(ae_filename):
+            logger.info(f"Found existing autoencoder checkpoint, skipping autoencoder training: {ae_filename}")
+            train_both = False
+
         if train_both:
             if self.alignment_model is None:
                 logger.error("No alignment model found in trainer")
                 raise ValueError("No alignment model found in trainer")
-            
+
             best_ae_val = float('inf')
             ae_optimizer = optim.Adam(self.autoencoder.parameters(), lr=1e-3, weight_decay=1e-5)
 
@@ -1160,7 +1259,7 @@ class PreloaderTrainer:
 
             for epoch in range(num_epochs):
                 self.autoencoder.train()
-                for target, source, _ in self.train_loader:
+                for target, source, _ in tqdm(self.train_loader, desc="AE Train", leave=False):
                     ae_optimizer.zero_grad()
                     target = target.to(device)
                     source = source.to(device)
@@ -1174,7 +1273,7 @@ class PreloaderTrainer:
                 self.autoencoder.eval()
                 total_loss = 0
                 with torch.no_grad():
-                    for target, source, _ in self.val_loader:
+                    for target, source, _ in tqdm(self.val_loader, desc="AE Val", leave=False):
                         target = target.to(device)
                         source = source.to(device)
                         combined_input = torch.cat((target, source), dim=0)
@@ -1191,8 +1290,18 @@ class PreloaderTrainer:
                     torch.save(self.autoencoder.state_dict(), ae_filename)
 
                 logger.info(log_message)
+                append_metrics_row(path.splitext(ae_filename)[0] + "_metrics.csv", {
+                    "epoch": epoch + 1,
+                    "val_loss": avg_val_loss,
+                    "best_val_loss": best_ae_val,
+                })
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
+
+        if path.exists(alignment_filename):
+            logger.info(f"Found existing alignment checkpoint, skipping alignment training: {alignment_filename}")
+            self.alignment_model.load_state_dict(torch.load(alignment_filename, weights_only=True))
+            return
 
         alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-5, weight_decay=1e-5)
         best_alignment_val = float('inf')
@@ -1206,7 +1315,7 @@ class PreloaderTrainer:
                 autoencoder=self.autoencoder,
                 alignment_model=self.alignment_model,
                 optimizer=alignment_optimizer,
-                dataloader=self.align_train_loader, 
+                dataloader=self.align_train_loader,
                 device=device,
                 train=True
             )
@@ -1215,7 +1324,7 @@ class PreloaderTrainer:
                 autoencoder=self.autoencoder,
                 alignment_model=self.alignment_model,
                 optimizer=None,
-                dataloader=self.align_val_loader, 
+                dataloader=self.align_val_loader,
                 device=device,
                 train=False
             )
@@ -1227,6 +1336,11 @@ class PreloaderTrainer:
                 torch.save(self.alignment_model.state_dict(), alignment_filename)
 
             logger.info(log_message)
+            append_metrics_row(path.splitext(alignment_filename)[0] + "_metrics.csv", {
+                "epoch": epoch + 1,
+                "val_loss": epoch_loss,
+                "best_val_loss": best_alignment_val,
+            })
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
         self.alignment_model.load_state_dict(torch.load(alignment_filename, weights_only=True))
@@ -1304,6 +1418,17 @@ class PreloaderTrainer:
                 torch.save(self.classifier.state_dict(), classifier_filename)
 
             logger.info(log_message)
+            append_metrics_row(path.splitext(classifier_filename)[0] + "_metrics.csv", {
+                "epoch": epoch + 1,
+                "lr": current_lr,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "test_loss": test_loss,
+                "test_acc": test_acc,
+                "best_val_loss": best_val_loss,
+            })
         
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 

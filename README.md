@@ -15,6 +15,9 @@ The codebase is organized into several key components:
 - `helpers.py`: Utility functions for model building and data processing
 - `plotters.py`: Visualization tools for model analysis
 - `type_defs.py`: Type definitions and configuration models
+- `samplers.py`: Class-pure batch sampling for the alignment dataloaders
+- `transforms.py`: Image preprocessing transforms shared by all datasets
+- `scripts/smoke_test/`: Quick pipeline sanity check against a small synthetic dataset (see "Smoke-Testing" below)
 - `toy_3D_case_infoNCE_divergence.ipynb`: Synthetic 3D experiments comparing divergence measures (CC-EBSW, CC-MMD, InfoNCE, etc.) across different domain alignment scenarios with varying geometric configurations and class distributions
 
 ## Installation
@@ -53,7 +56,8 @@ pip install -r requirements.txt
 - Visualization tools:
   - t-SNE plots for feature visualization
   - Energy-Based Wasserstein distance plots
-  - Example image transformations
+  - Accuracy vs. divergence scatter plots
+  - Example image transformations, including baseline autoencoder reconstructions
 - Flexible configuration system for experiment management
 
 ## Running the Code
@@ -89,6 +93,14 @@ The meta-configuration file allows you to specify:
 - Various UNet configurations
 - Different loss functions
 
+### 3. Smoke-Testing (optional)
+
+To quickly check that the pipeline still runs end-to-end (without a real dataset or a full training run), use `scripts/smoke_test/run_smoke_test.py`:
+
+```bash
+python scripts/smoke_test/run_smoke_test.py
+```
+
 ## Configuration Files
 
 ### Single Experiment Config
@@ -110,6 +122,12 @@ dataset:
   image_size: "small"  # or "large"
   rng_seed: 42
   batch_size: 32
+
+save_locations:
+  model_folder: "models"
+  file_folder: "files"
+  image_folder: "images"
+  logs_folder: "logs"
 
 classifier:
   model: "resnet18"
@@ -152,6 +170,7 @@ unet_attention: [true, false]
 The system generates:
 - Trained model checkpoints
 - Training logs
+- Per-epoch and per-layer-set metrics as CSV files, alongside the checkpoints they correspond to
 - Visualization plots:
   - t-SNE embeddings
   - Energy-Based Wasserstein distance plots
@@ -165,8 +184,12 @@ The system generates:
 - numpy
 - click
 - pydantic
+- PyYAML
 - matplotlib
 - scikit-learn
+- opencv-python
+- pillow-heif
+- tqdm
 
 ## Notes
 

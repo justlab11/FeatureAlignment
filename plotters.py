@@ -8,7 +8,6 @@ from os import path
 
 from losses import ISEBSW, mmdfuse
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
-from helpers import make_unet
 
 class TSNE_Plotter:
     def __init__(self, dataloaders: DataLoaderSet, embed_size: int, bs:int):
@@ -314,7 +313,79 @@ class EBSW_Plotter:
                 ).item() / target_flat.size(0)
 
         return total_isebsw_loss
-    
+
+    def run_mmdfuse(
+        self, model, dataloader, layers, device, target_only=True, alignment_model=None
+    ):
+        """
+        Computes MMD-Fuse distances for each batch and layer. Mirrors run_isebsw, but using the
+        mmdfuse test statistic (see losses.mmdfuse) instead of ISEBSW.
+
+        Args:
+            model (nn.Module): The classifier or base model.
+            dataloader (DataLoader): DataLoader for evaluation.
+            layers (list[int] or int): Layers to evaluate.
+            device (torch.device): Device for computation.
+            target_only (bool): If True, compares splits of target; else compares target and alignment_model outputs.
+            alignment_model (nn.Module, optional): Alignment model for transformed comparisons.
+
+        Returns:
+            np.ndarray: Array of shape (num_batches, num_layers) with mmdfuse values.
+        """
+        model.to(device)
+        model.eval()
+
+        if alignment_model is not None:
+            alignment_model.to(device)
+            alignment_model.eval()
+
+        if isinstance(layers, int):
+            layers = [i for i in range(layers+1)]
+
+        total_mmdfuse_loss = np.zeros((len(dataloader), len(layers)))
+
+        for i, (target, source, _) in enumerate(dataloader):
+            if target_only:
+                chunks = torch.chunk(target, 2)
+                if len(chunks) < 2:
+                    continue
+
+                min_len = min(chunks[0].size(0), chunks[1].size(0))
+                target_set = chunks[0][:min_len]
+                source_set = chunks[1][:min_len]
+
+            else:
+                chunks_target = torch.chunk(target, 2)
+                chunks_source = torch.chunk(source, 2)
+
+                if len(chunks_target) < 2 or len(chunks_source) < 2:
+                    continue
+
+                target_set, source_set = chunks_target[0], chunks_source[0]
+
+            # mmdfuse requires at least 2 samples on each side
+            if target_set.size(0) < 2 or source_set.size(0) < 2:
+                continue
+
+            target_set = target_set.to(device)
+            source_set = source_set.to(device)
+
+            if alignment_model and not target_only:
+                source_set = alignment_model(source_set)[-1]
+
+            target_outputs = model(target_set)[:layers[-1]+1]
+            source_outputs = model(source_set)[:layers[-1]+1]
+
+            for j, layer in enumerate(layers):
+                target_flat = target_outputs[layer].view(target_outputs[layer].size(0), -1)
+                source_flat = source_outputs[layer].view(source_outputs[layer].size(0), -1)
+
+                total_mmdfuse_loss[i, j] += mmdfuse(
+                    target_flat, source_flat, device=device
+                ).item() / target_flat.size(0)
+
+        return total_mmdfuse_loss
+
 
     def plot_ebsw(
         self,
@@ -334,41 +405,12 @@ class EBSW_Plotter:
             )
             include_alignment = False
 
-        base_ebsw_inter = self.run_isebsw(
-            model=models.base,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        mixed_ebsw_inter = self.run_isebsw(
-            model=models.mixed,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        contrast_ebsw_inter = self.run_isebsw(
-            model=models.contrast,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
+        # "intra" = within-domain (target vs target), "inter" = cross-domain (target vs source)
         base_ebsw_intra = self.run_isebsw(
             model=models.base,
             dataloader=self.val_loader,
             layers=layers,
-            target_only=False,
+            target_only=True,
             device=device,
             alignment_model=None,
             num_projections=num_projections
@@ -378,13 +420,43 @@ class EBSW_Plotter:
             model=models.mixed,
             dataloader=self.val_loader,
             layers=layers,
-            target_only=False,
+            target_only=True,
             device=device,
             alignment_model=None,
             num_projections=num_projections
         )
 
         contrast_ebsw_intra = self.run_isebsw(
+            model=models.contrast,
+            dataloader=self.val_loader,
+            layers=layers,
+            target_only=True,
+            device=device,
+            alignment_model=None,
+            num_projections=num_projections
+        )
+
+        base_ebsw_inter = self.run_isebsw(
+            model=models.base,
+            dataloader=self.val_loader,
+            layers=layers,
+            target_only=False,
+            device=device,
+            alignment_model=None,
+            num_projections=num_projections
+        )
+
+        mixed_ebsw_inter = self.run_isebsw(
+            model=models.mixed,
+            dataloader=self.val_loader,
+            layers=layers,
+            target_only=False,
+            device=device,
+            alignment_model=None,
+            num_projections=num_projections
+        )
+
+        contrast_ebsw_inter = self.run_isebsw(
             model=models.contrast,
             dataloader=self.val_loader,
             layers=layers,
@@ -395,7 +467,7 @@ class EBSW_Plotter:
         )
 
         if include_alignment:
-            align_base_ebsw_intra = self.run_isebsw(
+            align_base_ebsw_inter = self.run_isebsw(
                 model=models.base,
                 dataloader=self.val_loader,
                 layers=layers,
@@ -405,7 +477,7 @@ class EBSW_Plotter:
                 num_projections=num_projections
             )
 
-            align_mixed_ebsw_intra = self.run_isebsw(
+            align_mixed_ebsw_inter = self.run_isebsw(
                 model=models.mixed,
                 dataloader=self.val_loader,
                 layers=layers,
@@ -415,7 +487,7 @@ class EBSW_Plotter:
                 num_projections=num_projections
             )
 
-            align_contrast_ebsw_intra = self.run_isebsw(
+            align_contrast_ebsw_inter = self.run_isebsw(
                 model=models.contrast,
                 dataloader=self.val_loader,
                 layers=layers,
@@ -426,9 +498,9 @@ class EBSW_Plotter:
             )
 
             align_layer_measurements_inter = ModelSet(
-                base=align_base_ebsw_intra,
-                mixed=align_mixed_ebsw_intra,
-                contrast=align_contrast_ebsw_intra
+                base=align_base_ebsw_inter,
+                mixed=align_mixed_ebsw_inter,
+                contrast=align_contrast_ebsw_inter
             ).dict()
 
         layer_measurements_inter = ModelSet(
@@ -451,12 +523,12 @@ class EBSW_Plotter:
         if include_alignment:
             mode_labels = ['Target/Target', 'Target/Source', "Target/Source Aligned"]
             colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
-            modes = [layer_measurements_inter, layer_measurements_intra, align_layer_measurements_inter]
-            
+            modes = [layer_measurements_intra, layer_measurements_inter, align_layer_measurements_inter]
+
         else:
             mode_labels = ['Target/Target', 'Target/Source']
             colors = ['#1f77b4', '#ff7f0e']
-            modes = [layer_measurements_inter, layer_measurements_intra]
+            modes = [layer_measurements_intra, layer_measurements_inter]
 
         for i, cat in enumerate(categories):
             for j, mode in enumerate(modes):
@@ -467,7 +539,7 @@ class EBSW_Plotter:
                 data = mode[cat]
                 means = np.mean(data, axis=0)
                 stds = np.std(data, axis=0)
-                x = range(len(means))
+                x = np.arange(len(means))
 
                 if len(modes) == 2:
                     offset = .1*j - 0.05 # proper offset value for two error bars
@@ -537,7 +609,48 @@ def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
     plt.tight_layout()
     plt.savefig(filename, format="pdf", dpi=300)
     plt.close(fig)
-    
+
+def plot_autoencoder_examples(dataset, autoencoder, filename, device, num_samples=10):
+    """
+    Plots target/source input images against their autoencoder reconstructions.
+
+    Args:
+        dataset: Dataset object supporting indexing, yielding (target, source, label).
+        autoencoder: Trained autoencoder to reconstruct images.
+        filename: Output filename for the plot (PDF).
+        device: Torch device for model inference.
+        num_samples: Number of examples to plot (default: 10).
+    """
+    autoencoder.eval()
+    num_samples = min(num_samples, len(dataset))
+    random_samples = np.random.choice(len(dataset), num_samples, replace=False)
+
+    row_labels = ["Target In", "Target Recon", "Source In", "Source Recon"]
+    fig, axes = plt.subplots(4, num_samples, figsize=(2*num_samples, 8))
+
+    with torch.no_grad():
+        for i, sample_idx in enumerate(random_samples):
+            target, source, label = dataset[sample_idx]
+
+            target_recon = autoencoder(target.unsqueeze(0).to(device))[-1][0].detach().cpu()
+            source_recon = autoencoder(source.unsqueeze(0).to(device))[-1][0].detach().cpu()
+
+            images = [target, target_recon, source, source_recon]
+
+            for row, img in enumerate(images):
+                axes[row, i].imshow(np.transpose(img, (1, 2, 0)))
+                axes[row, i].axis('off')
+
+            axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
+
+    for row, row_label in enumerate(row_labels):
+        axes[row, 0].text(-0.15, 0.5, row_label, transform=axes[row, 0].transAxes,
+                           rotation=90, ha='right', va='center', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(filename, format="pdf", dpi=300)
+    plt.close(fig)
+
 def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     """
     Plots validation accuracy and inter/intra-domain distances across layer sets.
@@ -593,33 +706,81 @@ def divergence_plots(inter_data, intra_data, val_acc_values, fname):
     plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
     plt.close()
 
-def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
-    build_unet = make_unet(
-        size=32,
-        attention=False,
-        base_channels=2,
-        noise_channels=2
-    )
-    for x,y,_ in dataloader:
+def accuracy_vs_divergence_scatter(inter_data, val_acc_values, fname):
+    """
+    Scatter plot of mean inter-domain (target/source) divergence vs. validation accuracy,
+    one point per layer set, to visualize whether reduced divergence tracks with accuracy.
+
+    Args:
+        inter_data: 2D array (layer_sets x comparisons), same raw array passed to `divergence_plots`
+            as `inter_data` (the pre-alignment baseline row is dropped internally to match val_acc_values).
+        val_acc_values: 1D array of validation accuracies, one per layer set.
+        fname: Output filename for the plot (PDF).
+    """
+    inter_data = torch.tensor(inter_data)[1:]
+    val_acc_values = np.asarray(val_acc_values)
+
+    mean_divergence = torch.mean(inter_data, dim=(1, 2)).numpy()
+
+    n = len(mean_divergence)
+    x_labels = [f"{i-1}" if i==n else (f"{i-1}-{n-1}" if i>1 else f"Input-{n-1}") for i in range(n, 0, -1)]
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    scatter = ax.scatter(mean_divergence, val_acc_values*100, c=np.arange(n), cmap='viridis', s=100, edgecolors='k')
+
+    for i, label in enumerate(x_labels):
+        ax.annotate(label, (mean_divergence[i], val_acc_values[i]*100), textcoords="offset points", xytext=(6, 6), fontsize=8)
+
+    ax.set_xlabel('Mean Inter-Domain (Target/Source) Divergence')
+    ax.set_ylabel('Validation Accuracy (%)')
+    ax.grid(True, linestyle=":", alpha=.7)
+
+    title = "Validation Accuracy vs. Inter-Domain Divergence by Layer Set"
+    if n > 1:
+        corr = np.corrcoef(mean_divergence, val_acc_values)[0, 1]
+        title += f" (r = {corr:.3f})"
+    ax.set_title(title)
+
+    cbar = fig.colorbar(scatter, ax=ax)
+    cbar.set_label("Layer Set (earliest → latest)")
+
+    plt.tight_layout()
+    plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
+    plt.close(fig)
+
+def incremental_sample_plots(dataloader, unet_fname_set, build_unet, device, output_folder):
+    """
+    Plots target, source, and per-checkpoint aligned-source images side by side.
+
+    Args:
+        dataloader: DataLoader yielding (target, source, label) batches.
+        unet_fname_set: Iterable of alignment model checkpoint paths, in display order.
+        build_unet: Callable returning a freshly-initialized alignment model (see helpers.make_unet).
+        device: Torch device for inference.
+        output_folder: Directory to save the per-sample PDF plots to.
+    """
+    for x, y, _ in dataloader:
         target = x[:16]
         source = y[:16].to(device)
         break
 
-    outputs = [target]
-    for unet_fname in unet_fname_set:
-        unet = buid_unet()
-        
-        unet.to(device)
-        unet.load_state_dict(torch.load(unet_fname, weights_only=True))
+    num_items = min(16, target.size(0))
 
-        unet.eval()
-        outputs.append(unet(source)[-1].detach().cpu())
-        del unet
+    outputs = [target[:num_items]]
 
-    outputs.append(source)
+    with torch.no_grad():
+        for unet_fname in unet_fname_set:
+            unet = build_unet()
+            unet.to(device)
+            unet.load_state_dict(torch.load(unet_fname, weights_only=True))
+            unet.eval()
+
+            outputs.append(unet(source)[-1][:num_items].detach().cpu())
+            del unet
+
+    outputs.append(source[:num_items].cpu())
 
     num_entries = len(outputs)
-    num_items = 16
 
     for item_idx in range(num_items):
         fig, axs = plt.subplots(1, num_entries, figsize=(num_entries*2, 2))
@@ -627,11 +788,11 @@ def incremental_sample_plots(dataloader, unet_fname_set, device, output_folder):
         for entry_idx, ax in enumerate(axs):
             img = outputs[num_entries-entry_idx-1][item_idx]
             if img.shape[0] == 3:
-                img.np.transpose(img, (1,2,0))
+                img = np.transpose(img, (1, 2, 0))
 
             ax.imshow(img)
             ax.axis("off")
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_folder, f"increment_image-{item_idx}.pdf"), dpi=300, bbox_inches='tight')
+        plt.savefig(path.join(output_folder, f"increment_image-{item_idx}.pdf"), dpi=300, bbox_inches='tight')
         plt.close()

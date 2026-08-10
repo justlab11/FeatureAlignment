@@ -20,10 +20,26 @@ import samplers
 @click.command()
 @click.option("--config_fname", help="Config file path for the script (likely in configs folder)")
 def main(config_fname):
-    DEVICE: Literal["cpu", "cuda"] = "cuda" if torch.cuda.is_available() else "cpu"
+    # optional device override for fast smoke-testing (see scripts/smoke_test): GPU
+    # dispatch/kernel-launch overhead dominates for tiny batches on tiny models, so
+    # CPU is often faster there; unset by default so real runs are unaffected
+    DEVICE: Literal["cpu", "cuda"] = (
+        os.environ.get("FEATUREALIGNMENT_FORCE_DEVICE")
+        or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     config_yaml = helpers.load_yaml(config_fname)
     CONFIG: type_defs.Config = type_defs.Config(**config_yaml)
+
+    # optional epoch cap for fast smoke-testing (see scripts/smoke_test); unset by
+    # default so real runs are unaffected
+    EPOCH_CAP: int | None = (
+        int(os.environ["FEATUREALIGNMENT_EPOCH_CAP"])
+        if "FEATUREALIGNMENT_EPOCH_CAP" in os.environ
+        else None
+    )
+    def capped_epochs(num_epochs: int) -> int:
+        return min(num_epochs, EPOCH_CAP) if EPOCH_CAP else num_epochs
 
     # define constants
     target_dir: str = CONFIG.dataset.target.folder
@@ -131,46 +147,64 @@ def main(config_fname):
             transforms.ToTensor(),
         ])
 
-    target_train_split, target_test_split, target_val_split = helpers.build_splits(
-        folder=target_dir,
-        split_pcts=[
-            CONFIG.dataset.target.train_pct,
-            CONFIG.dataset.target.val_pct,
-            1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
-        ],
-        seed=RNG
-    )
+    if not os.path.exists(f"{target_dir}/train"):
+        target_train_split, target_test_split, target_val_split = helpers.build_splits(
+            folder=target_dir,
+            split_pcts=[
+                CONFIG.dataset.target.train_pct,
+                CONFIG.dataset.target.val_pct,
+                1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
+            ],
+            seed=RNG
+        )
+        
+        source_train_split, source_test_split, source_val_split = helpers.build_splits(
+            folder=source_dir,
+            split_pcts=[
+                CONFIG.dataset.source.train_pct,
+                CONFIG.dataset.source.val_pct,
+                1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
+            ],
+            seed=RNG
+        )
     
-    source_train_split, source_test_split, source_val_split = helpers.build_splits(
-        folder=source_dir,
-        split_pcts=[
-            CONFIG.dataset.source.train_pct,
-            CONFIG.dataset.source.val_pct,
-            1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
-        ],
-        seed=RNG
-    )
+        train_ds = datasets.CombinedDataset(
+            data_folder=target_dir,
+            target_split_samples=target_train_split,
+            source_split_samples=source_train_split,
+            transform=transform
+        )
 
-    train_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        data_folder=target_dir,
-        target_split_samples=target_train_split,
-        source_split_samples=source_train_split,
-        transform=transform
-    )
+        test_ds = datasets.CombinedDataset(
+            data_folder=target_dir,
+            target_split_samples=target_test_split,
+            source_split_samples=source_test_split,
+            transform=transform
+        )
 
-    test_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        data_folder=target_dir,
-        target_split_samples=target_test_split,
-        source_split_samples=source_test_split,
-        transform=transform
-    )
+        val_ds = datasets.CombinedDataset(
+            data_folder=target_dir,
+            target_split_samples=target_val_split,
+            source_split_samples=source_val_split,
+            transform=transform
+        )
 
-    val_ds: datasets.CombinedDataset = datasets.CombinedDataset(
-        data_folder=target_dir,
-        target_split_samples=target_val_split,
-        source_split_samples=source_val_split,
-        transform=transform
-    )
+    else:
+        train_ds = datasets.CombinedDataset(
+            data_folder=f"{target_dir}/train",
+            transform=transform
+        )
+
+        test_ds = datasets.CombinedDataset(
+            data_folder=f"{target_dir}/test",
+            transform=transform
+        )
+
+        val_ds = datasets.CombinedDataset(
+            data_folder=f"{target_dir}/val",
+            transform=transform
+        )
+
 
     logger.info(f"\tTrain Dataset - Target: {train_ds.get_target_size()}, Source: {train_ds.get_source_size()}")
     logger.info(f"\tTest Dataset - Target: {test_ds.get_target_size()}, Source: {test_ds.get_source_size()}")
@@ -188,7 +222,7 @@ def main(config_fname):
         val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False
     )
 
-    cls_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
+    cls_dl_set = type_defs.DataLoaderSet(
         train_loader=cls_train_loader,
         test_loader=cls_test_loader,
         val_loader=cls_val_loader
@@ -227,7 +261,7 @@ def main(config_fname):
         val_ds, batch_sampler=val_sampler
     )
 
-    align_dl_set: type_defs.DataLoaderSet = type_defs.DataLoaderSet(
+    align_dl_set = type_defs.DataLoaderSet(
         train_loader=align_train_loader,
         test_loader=align_test_loader,
         val_loader=align_val_loader
@@ -265,13 +299,23 @@ def main(config_fname):
         ae_filename=baseline_ae_filename,
         alignment_filename=baseline_unet_filename,
         device=DEVICE,
+        num_epochs=capped_epochs(100),
         train_both=True
+    )
+
+    logger.info("Generating Baseline Autoencoder Example Plots")
+    baseline_ae_examples_file = f"{IMAGE_FOLDER}/baseline_autoencoder_examples_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
+    plotters.plot_autoencoder_examples(
+        dataset=val_ds,
+        autoencoder=baseline_autoencoder,
+        filename=baseline_ae_examples_file,
+        device=DEVICE
     )
 
     baseline_model_trainer.classification_train_loop(
        classifier_filename=baseline_classifier_filename,
        device=DEVICE,
-       num_epochs=100,
+       num_epochs=capped_epochs(100),
        use_alignment=True
     )
 
@@ -285,6 +329,8 @@ def main(config_fname):
         resnet_type=CONFIG.classifier.model,
         num_classes=TARGET_NUM_CLASSES,
     )
+
+    helpers.validate_num_layers(model, x, device=DEVICE)
 
     unet = build_unet()
 
@@ -302,7 +348,7 @@ def main(config_fname):
         base_model_trainer.classifier_trainer.classification_train_loop(
             classifier_filename = base_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=capped_epochs(CONFIG.classifier.num_epochs),
             target_only=True,
             use_alignment=False
         )
@@ -333,7 +379,7 @@ def main(config_fname):
         mixed_model_trainer.classifier_trainer.classification_train_loop(
             classifier_filename = mixed_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=capped_epochs(CONFIG.classifier.num_epochs),
             target_only=False,
             use_alignment=False
         )
@@ -365,7 +411,7 @@ def main(config_fname):
         best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
             filename = contrast_model_file,
             device=DEVICE,
-            num_epochs=CONFIG.classifier.num_epochs,
+            num_epochs=capped_epochs(CONFIG.classifier.num_epochs),
             temp_range=[0.05],
         )
     else:
@@ -446,6 +492,7 @@ def main(config_fname):
         classifier_fname=mixed_classifier_final_fname,
         examples_fname=mixed_examples_final_fname,
         device=DEVICE,
+        num_epochs=capped_epochs(100),
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
@@ -458,6 +505,7 @@ def main(config_fname):
         classifier_fname=contrast_classifier_final_fname,
         examples_fname=contrast_examples_final_fname,
         device=DEVICE,
+        num_epochs=capped_epochs(100),
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")

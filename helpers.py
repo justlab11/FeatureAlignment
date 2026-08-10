@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import yaml
 import logging
+import csv
 from typing import List
 from glob import glob
 import os
@@ -19,7 +20,7 @@ def build_splits(folder: str, split_pcts: List[float], seed):
         recursive=True
     )
     files = [f for f in files if os.path.isfile(f)]
-    print(len(files))    
+    logger.info(f"Found {len(files)} files in {folder}")
     labels = []
     samples = []
 
@@ -29,7 +30,7 @@ def build_splits(folder: str, split_pcts: List[float], seed):
         labels.append(class_name)
         samples.append(f)
 
-    print(Counter(labels))
+    logger.debug(f"Class distribution in {folder}: {dict(Counter(labels))}")
 
     # collect split information
     train_size, val_size, test_size = split_pcts
@@ -46,6 +47,44 @@ def build_splits(folder: str, split_pcts: List[float], seed):
 
     # only return the lists of files (the labels are handled by the dataset class)
     return X_train, X_test, X_val
+
+def append_metrics_row(csv_path: str, row: dict):
+    """Append one row of per-epoch metrics to a CSV, writing the header the first time."""
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+def validate_num_layers(model, sample_input, device="cpu"):
+    """
+    One-time sanity check that model.get_num_layers() matches the number of layer
+    outputs a real forward pass produces. Layer-indexed code (cascade/single-layer
+    alignment, EBSW plots) silently mis-indexes if these two disagree.
+    """
+    model.to(device)
+    was_training = model.training
+    model.eval()
+
+    with torch.no_grad():
+        outputs = model(sample_input.to(device))
+
+    if was_training:
+        model.train()
+
+    actual = len(outputs)
+    reported = model.get_num_layers()
+
+    if actual != reported:
+        logger.warning(
+            f"{type(model).__name__}.get_num_layers() reports {reported} layers, but a forward "
+            f"pass produced {actual} layer outputs. Layer-indexed code may be silently mis-indexing."
+        )
+    else:
+        logger.info(f"{type(model).__name__}.get_num_layers() verified: {reported} layers match forward() output.")
+
+    return actual, reported
 
 def load_yaml(file_path: str):
     with open(file_path, "r") as file:
@@ -93,7 +132,9 @@ def compute_layer_loss(base_reps: List[torch.tensor], aux_reps: List[torch.tenso
         aux_normed = F.softmax(aux_reshaped, dim=1)
     else:  # Intermediate layers
         # compare against latent representations
-        base_normed = base_reshaped / torch.norm(base_reshaped, dim=1, keepdim=True)
-        aux_normed = aux_reshaped / torch.norm(aux_reshaped, dim=1, keepdim=True)
+        base_norms = torch.norm(base_reshaped, dim=1, keepdim=True).clamp(min=1e-12)
+        aux_norms = torch.norm(aux_reshaped, dim=1, keepdim=True).clamp(min=1e-12)
+        base_normed = base_reshaped / base_norms
+        aux_normed = aux_reshaped / aux_norms
 
     return criterion(base_normed, aux_normed, device=device)
