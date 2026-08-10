@@ -35,22 +35,28 @@ import type_defs  # noqa: E402
 def run_schema_drift_check():
     """
     Bonus check: do the checked-in configs/*.yaml files still validate
-    against the current type_defs.Config schema? (They didn't, as of the
+    against the current type_defs schema? (Several didn't, as of the
     investigation that led to this script -- kept here as a standing
     regression guard, informational rather than pass/fail-gating.)
+
+    META_config.yaml is the one meta-config consumed by run_main.py, so it's
+    validated against type_defs.MetaConfig; every other configs/*.yaml file
+    is a single-experiment config consumed by main.py, validated against
+    type_defs.Config.
     """
-    print("\n=== Config schema-drift check (configs/*.yaml vs current type_defs.Config) ===")
+    print("\n=== Config schema-drift check (configs/*.yaml vs current type_defs schemas) ===")
     config_dir = REPO_ROOT / "configs"
     any_checked = False
     for path in sorted(config_dir.glob("*.yaml")):
         any_checked = True
+        schema = type_defs.MetaConfig if path.name == "META_config.yaml" else type_defs.Config
         try:
             data = helpers.load_yaml(str(path))
-            type_defs.Config(**data)
-            print(f"  [PASS] {path.name}")
+            schema(**data)
+            print(f"  [PASS] {path.name} (as {schema.__name__})")
         except Exception as e:
             detail = str(e).splitlines()[0]
-            print(f"  [FAIL] {path.name} -- {detail}")
+            print(f"  [FAIL] {path.name} (as {schema.__name__}) -- {detail}")
     if not any_checked:
         print("  (no configs/*.yaml files found)")
 

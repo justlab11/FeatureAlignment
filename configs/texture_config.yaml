@@ -2,14 +2,16 @@ dataset:
   target:
     name: "MNIST"
     folder: "data/mnist_v2"
-    train_size: 1000
-    val_size: 3000
+    train_pct: 0.02
+    val_pct: 0.3
+    num_classes: 10
 
   source:
     name: "texture_mnist"
     folder: "data/texture_mnist_32"
-    train_size: 69000
-    val_size: 500
+    train_pct: 0.98
+    val_pct: 0.01
+    num_classes: 10
 
   image_size: "small"
   rng_seed: 72
