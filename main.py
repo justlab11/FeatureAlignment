@@ -18,6 +18,11 @@ import models
 import type_defs
 import samplers
 
+def _seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 @click.command()
 @click.option("--config_fname", help="Config file path for the script (likely in configs folder)")
 def main(config_fname):
@@ -88,6 +93,7 @@ def main(config_fname):
     torch.cuda.manual_seed(RNG)
     np.random.seed(RNG)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     random.seed(RNG)
 
     # start logging
@@ -187,7 +193,8 @@ def main(config_fname):
     logger.info(f"\tValidation Dataset - Target: {val_ds.get_target_size()}, Source: {val_ds.get_source_size()}")
 
     cls_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=False, pin_memory=True
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, drop_last=False, pin_memory=True,
+        worker_init_fn=_seed_worker
     )
 
     cls_test_loader = torch.utils.data.DataLoader(
@@ -226,7 +233,8 @@ def main(config_fname):
     )
 
     align_train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True
+        train_ds, batch_sampler=train_sampler, num_workers=2, pin_memory=True,
+        worker_init_fn=_seed_worker
     )
 
     align_test_loader = torch.utils.data.DataLoader(

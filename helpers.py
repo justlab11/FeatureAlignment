@@ -33,8 +33,8 @@ def build_splits(folder: str, split_pcts: List[float], seed):
         os.path.join(folder, "**", "*"),
         recursive=True
     )
-    files = [f for f in files if os.path.isfile(f)]
-    print(len(files))    
+    files = sorted(f for f in files if os.path.isfile(f))
+    print(len(files))
     labels = []
     samples = []
 

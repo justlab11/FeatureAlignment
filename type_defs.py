@@ -72,9 +72,14 @@ class MetaDatasetConfig(BaseModel):
     folder: str
     num_classes: int
 
+class DatasetSplits(BaseModel):
+    dataset: str
+    train_pct: float | None
+    val_pct: float | None
+
 class MetaDatasetPair(BaseModel):
-    target: str
-    source: str
+    target: List[DatasetSplits]
+    source: List[DatasetSplits]
 
 class MetaConfig(BaseModel):
     datasets: List[MetaDatasetConfig]
