@@ -52,8 +52,10 @@ def fully_supervised_contrastive_loss(features, labels, group_labels, temperatur
     log_prob_inter = similarity_matrix - torch.log(exp_logits + neg_inter_exp_logits.sum(1, keepdim=True))
     
     # Compute mean of log-likelihood over positive pairs
-    mean_log_prob_pos = (mask_exc * log_prob).sum(1) / mask_exc.sum(1)
-    mean_log_prob_pos_inter = (pos_inter_mask * log_prob_inter).sum(1) / (pos_inter_mask.sum(1))
+    # clamp(min=1) guards anchors with no same-class partner in the batch so they
+    # contribute 0 instead of NaN (0/0) and poisoning the whole batch loss.
+    mean_log_prob_pos = (mask_exc * log_prob).sum(1) / mask_exc.sum(1).clamp(min=1)
+    mean_log_prob_pos_inter = (pos_inter_mask * log_prob_inter).sum(1) / pos_inter_mask.sum(1).clamp(min=1)
 
     # Loss
     loss = (-mean_log_prob_pos-mean_log_prob_pos_inter ).mean()
