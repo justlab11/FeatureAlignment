@@ -44,12 +44,14 @@ class ClassifierTrainer:
         proj_head (nn.Module): Projection head for contrastive learning tasks.
     """
 
-    def __init__(self, classifier, alignment_model, dataloaders: DataLoaderSet):
+    def __init__(self, classifier, alignment_model, dataloaders: DataLoaderSet, lr: float = 1e-2, weight_decay: float = 1e-5):
         # initialize the models used for the trainers
         self.classifier: nn.Module = classifier
         self.alignment_model: nn.Module = alignment_model
+        self.lr: float = lr
+        self.weight_decay: float = weight_decay
 
-        # 
+        #
         self.train_loader: DataLoader = dataloaders.train_loader
         self.test_loader: DataLoader= dataloaders.test_loader
         self.val_loader: DataLoader = dataloaders.val_loader
@@ -258,7 +260,18 @@ class ClassifierTrainer:
                     best_val_loss = val_loss
                     best_temp = temp
                     torch.save(self.classifier.state_dict(), classifier_filename)
-        
+
+        # Fall back if validation loss never improved (e.g. NaN every epoch), so
+        # downstream code always has a saved checkpoint and a real temperature to report.
+        if best_temp is None:
+            logger.warning(
+                "\tValidation loss never improved during temperature search (NaN or no data); "
+                f"falling back to last temperature tried: {temp_range[-1]}"
+            )
+            best_temp = temp_range[-1]
+            best_val_loss = val_loss
+            torch.save(self.classifier.state_dict(), classifier_filename)
+
         return best_temp, best_val_loss
 
     def reset_parameters(self, module):
@@ -327,8 +340,8 @@ class ClassifierTrainer:
             float: Best validation loss achieved during training.
         """
 
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-4, momentum=.9, 
-                              nesterov=True, weight_decay=1e-2)
+        optimizer = optim.SGD(self.classifier.parameters(), lr=self.lr, momentum=.9,
+                              nesterov=True, weight_decay=self.weight_decay)
 
         scheduler = CosineAnnealingWarmRestarts(
             optimizer=optimizer,
@@ -386,10 +399,19 @@ class ClassifierTrainer:
                 torch.save(self.classifier.state_dict(), classifier_filename)
 
             logger.info(log_message)
-        
+
+        # Fall back if val_acc never exceeded the initial best (e.g. 0% every epoch),
+        # so a checkpoint always exists and downstream load_state_dict doesn't crash.
+        if not os.path.exists(classifier_filename):
+            logger.warning(
+                f"\tValidation accuracy never improved past {best_val_acc*100:.2f}%; "
+                "saving final-epoch classifier state as fallback checkpoint."
+            )
+            torch.save(self.classifier.state_dict(), classifier_filename)
+
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
-        return best_val_acc    
+        return best_val_acc
 
     def evaluate_model(self, device, use_alignment=False, test=False):
         """
@@ -594,7 +616,9 @@ class FullTrainer:
         alignment_dataloaders: DataLoaderSet,
         file_folder: str,
         alignment_loss: str,
-        classifier_name: str
+        classifier_name: str,
+        classifier_lr: float = 1e-2,
+        classifier_weight_decay: float = 1e-5
     ):
         """
         Initializes the FullTrainer, which orchestrates classifier and alignment model training.
@@ -607,6 +631,8 @@ class FullTrainer:
             file_folder (str): Path for saving models and logs.
             alignment_loss (str): Loss function for alignment model ('ebsw' or 'mmdfuse').
             classifier_name (str): Name identifier for the classifier.
+            classifier_lr (float): Learning rate for the classifier's SGD optimizer.
+            classifier_weight_decay (float): Weight decay for the classifier's SGD optimizer.
         """
         self.classifier: nn.Module = classifier
         self.alignment_model: nn.Module = alignment_model
@@ -618,8 +644,10 @@ class FullTrainer:
 
         self.classifier_trainer: ClassifierTrainer = ClassifierTrainer(
             classifier=self.classifier,
-            alignment_model=self.alignment_model,  
+            alignment_model=self.alignment_model,
             dataloaders=self.classifier_dataloaders,
+            lr=classifier_lr,
+            weight_decay=classifier_weight_decay,
         )
 
         self.alignment_trainer: AlignmentTrainer = AlignmentTrainer(
@@ -761,6 +789,16 @@ class FullTrainer:
                 prev_iter_val_acc = val_acc
                 inner_iter += 1
 
+            # Fall back if val acc never exceeded the initial 0.0 (e.g. 0% every inner
+            # iteration), so span-best checkpoints always exist before we try to load them.
+            if not os.path.exists(best_classifier_fname) or not os.path.exists(best_alignment_fname):
+                logger.warning(
+                    f"\tSpan {start_layer}: validation accuracy never improved past "
+                    f"{best_span_val_acc*100:.2f}%; promoting last working checkpoint as span-best."
+                )
+                shutil.copy(working_classifier_fname, best_classifier_fname)
+                shutil.copy(working_alignment_fname, best_alignment_fname)
+
             # Load best span checkpoints before evaluation and divergence measurement
             self.classifier.load_state_dict(torch.load(best_classifier_fname, weights_only=True))
             self.alignment_model.load_state_dict(torch.load(best_alignment_fname, weights_only=True))
@@ -854,10 +892,20 @@ class FullTrainer:
         )
 
 class PreloaderTrainer:
-    def __init__(self, autoencoder, alignment_model, classifier, cls_dataloaders: DataLoaderSet, align_dataloaders: DataLoaderSet):
+    def __init__(self, autoencoder, alignment_model, classifier, cls_dataloaders: DataLoaderSet, align_dataloaders: DataLoaderSet,
+                 alignment_loss: str = "ebsw", classifier_lr: float = 1e-2, classifier_weight_decay: float = 1e-5):
         self.autoencoder = autoencoder
         self.classifier = classifier
         self.alignment_model = alignment_model
+        self.classifier_lr: float = classifier_lr
+        self.classifier_weight_decay: float = classifier_weight_decay
+
+        if alignment_loss == "ebsw":
+            self.criterion = ISEBSW
+        elif alignment_loss == "mmdfuse":
+            self.criterion = mmdfuse
+        else:
+            raise ValueError(f"Unknown alignment_loss: {alignment_loss}")
 
         self.train_loader: DataLoader = cls_dataloaders.train_loader
         self.test_loader: DataLoader = cls_dataloaders.test_loader
@@ -876,7 +924,7 @@ class PreloaderTrainer:
                 nn.init.zeros_(m.bias)
 
     def _alignment_run(self, autoencoder, alignment_model, optimizer, dataloader, device, train=True):
-        criterion = ISEBSW
+        criterion = self.criterion
         alignment_model.to(device)
         autoencoder.to(device)
 
@@ -904,7 +952,7 @@ class PreloaderTrainer:
             for i in range(len(target_reps)//2):
                 target_reshaped = target_reps[i].view(target_reps[i].size(0), -1)
                 source_reshaped = source_reps[i].view(source_reps[i].size(0), -1)
-                loss += criterion(target_reshaped, source_reshaped, L=256, device=device)
+                loss += criterion(target_reshaped, source_reshaped, device=device)
 
             if train:
                 loss.backward()
@@ -1045,7 +1093,7 @@ class PreloaderTrainer:
 
         self.autoencoder.load_state_dict(torch.load(ae_filename, weights_only=True))
 
-        alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-5, weight_decay=1e-5)
+        alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-4, weight_decay=1e-5)
         best_alignment_val = float('inf')
 
         self.autoencoder.to(device)
@@ -1098,8 +1146,8 @@ class PreloaderTrainer:
             float: Best validation loss achieved during training.
         """
 
-        optimizer = optim.SGD(self.classifier.parameters(), lr=1e-2, momentum=.9, 
-                              nesterov=True, weight_decay=1e-2)
+        optimizer = optim.SGD(self.classifier.parameters(), lr=self.classifier_lr, momentum=.9,
+                              nesterov=True, weight_decay=self.classifier_weight_decay)
 
         scheduler = CosineAnnealingWarmRestarts(
             optimizer=optimizer,
@@ -1157,10 +1205,19 @@ class PreloaderTrainer:
                 torch.save(self.classifier.state_dict(), classifier_filename)
 
             logger.info(log_message)
-        
+
+        # Fall back if val_acc never exceeded the initial best (e.g. 0% every epoch),
+        # so a checkpoint always exists and downstream load_state_dict doesn't crash.
+        if not os.path.exists(classifier_filename):
+            logger.warning(
+                f"\tValidation accuracy never improved past {best_val_acc*100:.2f}%; "
+                "saving final-epoch classifier state as fallback checkpoint."
+            )
+            torch.save(self.classifier.state_dict(), classifier_filename)
+
         self.classifier.load_state_dict(torch.load(classifier_filename, weights_only=True))
 
-        return best_val_loss    
+        return best_val_loss
 
     def evaluate_model(self, device, use_alignment=False, test=False):
         """

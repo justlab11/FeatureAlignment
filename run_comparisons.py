@@ -80,7 +80,7 @@ def build_office31(
     office_path: Union[str, Path, None] = None,
 ):
     """Get a train-val-test split for Office 31 domain adaptation experiments."""
-    test_split_seed = 42  # hard-coded
+    test_split_seed = seed
 
     num_source_per_class = 20 if source_name == "amazon" else 8
     num_target_per_class = 3

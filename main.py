@@ -62,6 +62,13 @@ def main(config_fname):
 
     LOSS: str = CONFIG.unet.loss
     RNG: int = CONFIG.dataset.rng_seed
+
+    # Dataset-family-specific classifier optimizer hyperparameters (per paper Appendix Tables 3/4):
+    # MNIST-family ("small") uses a higher lr / lower weight decay than Office-31-family ("large").
+    if CONFIG.dataset.image_size == "small":
+        CLASSIFIER_LR, CLASSIFIER_WD = 1e-2, 1e-5
+    else:
+        CLASSIFIER_LR, CLASSIFIER_WD = 1e-4, 1e-2
     TARGET_NUM_CLASSES: int = CONFIG.dataset.target.num_classes
     SOURCE_NUM_CLASSES: int = CONFIG.dataset.source.num_classes
 
@@ -125,7 +132,7 @@ def main(config_fname):
         ])
     elif CONFIG.dataset.image_size == "large":
         transform = transforms.Compose([
-            transforms.Resize(128),  # Ensure consistency if needed
+            transforms.Resize(224),  # LargeCustomUNET's latent norm is sized for 224x224 input
             tr.EnsureThreeChannelsPIL(),  # Convert to 3 channels
             transforms.ToTensor(),
         ])
@@ -294,7 +301,10 @@ def main(config_fname):
             alignment_model = baseline_unet,
             classifier = baseline_classifier,
             cls_dataloaders = cls_dl_set,
-            align_dataloaders=align_dl_set
+            align_dataloaders=align_dl_set,
+            alignment_loss=LOSS,
+            classifier_lr=CLASSIFIER_LR,
+            classifier_weight_decay=CLASSIFIER_WD
         )
 
         baseline_model_trainer.alignment_preloader_train_loop(
@@ -334,7 +344,9 @@ def main(config_fname):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
-        classifier_name="base"
+        classifier_name="base",
+        classifier_lr=CLASSIFIER_LR,
+        classifier_weight_decay=CLASSIFIER_WD
     )
 
     if not os.path.exists(base_model_file):
@@ -365,7 +377,9 @@ def main(config_fname):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
-        classifier_name="mixed"
+        classifier_name="mixed",
+        classifier_lr=CLASSIFIER_LR,
+        classifier_weight_decay=CLASSIFIER_WD
     )
 
     if not os.path.exists(mixed_model_file):
@@ -397,7 +411,9 @@ def main(config_fname):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
-        classifier_name="contrast"
+        classifier_name="contrast",
+        classifier_lr=CLASSIFIER_LR,
+        classifier_weight_decay=CLASSIFIER_WD
     )
 
     if not os.path.exists(contrast_full_model_file):
@@ -486,6 +502,7 @@ def main(config_fname):
         classifier_fname=mixed_classifier_final_fname,
         examples_fname=mixed_examples_final_fname,
         device=DEVICE,
+        num_epochs=CONFIG.unet.num_epochs,
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
@@ -498,6 +515,7 @@ def main(config_fname):
         classifier_fname=contrast_classifier_final_fname,
         examples_fname=contrast_examples_final_fname,
         device=DEVICE,
+        num_epochs=CONFIG.unet.num_epochs,
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")

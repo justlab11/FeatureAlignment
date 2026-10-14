@@ -754,7 +754,7 @@ class LargeCustomUNET(nn.Module):
     """
     Expects images of size 224x224
     """
-    def __init__(self, base_channels=32, noise_channels=8, norm_size=8):
+    def __init__(self, base_channels=32, noise_channels=8, norm_size=14):
         super(LargeCustomUNET, self).__init__()
         
         self.base_channels = base_channels
@@ -768,7 +768,7 @@ class LargeCustomUNET(nn.Module):
         self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
         # Latent space normalization
-        self.latent_norm = nn.LayerNorm([base_channels * 16, norm_size, norm_size])  # Adjusted for latent space size (7x7 for 224x224 input)
+        self.latent_norm = nn.LayerNorm([base_channels * 16, norm_size, norm_size])  # 14x14 latent for 224x224 input (4 stride-2 pools: 224 / 2**4 = 14)
 
         # Noise addition
         self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
@@ -851,9 +851,9 @@ class LargeAttentionUNET(nn.Module):
     """
     Expects images of size 224x224
     """
-    def __init__(self, base_channels=32, noise_channels=8):
+    def __init__(self, base_channels=32, noise_channels=8, norm_size=14):
         super(LargeAttentionUNET, self).__init__()
-        
+
         self.base_channels = base_channels
         self.noise_channels = noise_channels
 
@@ -864,8 +864,9 @@ class LargeAttentionUNET(nn.Module):
         self.enc4 = self.conv_block(base_channels * 4, base_channels * 8)
         self.enc5 = self.conv_block(base_channels * 8, base_channels * 16)
 
-        # Latent space normalization
-        self.latent_norm = nn.LayerNorm([base_channels * 16, 7, 7])  # Adjusted for latent space size (7x7 for 224x224 input)
+        # Latent space normalization (applied to spatially-flattened latent: channels x (norm_size*norm_size))
+        # 14x14 latent for 224x224 input (4 stride-2 pools: 224 / 2**4 = 14)
+        self.latent_norm = nn.LayerNorm([base_channels * 16, norm_size * norm_size])
 
         # Noise addition
         self.noise_conv = nn.Conv2d(noise_channels, base_channels * 16, kernel_size=1)  # Transform noise to match latent space channels
@@ -928,7 +929,7 @@ class LargeAttentionUNET(nn.Module):
         batch_size, channels, height, width = e5.shape
 
         e5_normalized = e5.view(batch_size, channels, -1)  # Flatten spatial dimensions
-        e5_normalized = nn.LayerNorm(e5_normalized.size()[1:])(e5_normalized)  
+        e5_normalized = self.latent_norm(e5_normalized)
         e5_normalized = e5_normalized.view(batch_size, channels, height, width)  # Reshape back
 
         noise = torch.randn(batch_size, self.noise_channels, height, width, device=e5.device)  

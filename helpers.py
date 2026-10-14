@@ -67,7 +67,7 @@ def load_yaml(file_path: str):
         data = yaml.safe_load(file)
     return data
 
-def build_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8, norm_size:int=8):
+def build_unet(size:str, attention:bool=False, base_channels:int=32, noise_channels:int=8, norm_size:int=14):
     def unet():
         if size == "small" and attention:
             model = models.SmallAttentionUNET(
@@ -83,7 +83,8 @@ def build_unet(size:str, attention:bool=False, base_channels:int=32, noise_chann
         elif size == "large" and attention:
             model = models.LargeAttentionUNET(
                 base_channels=base_channels,
-                noise_channels=noise_channels
+                noise_channels=noise_channels,
+                norm_size=norm_size
             )
 
         elif size == "large" and not attention:
