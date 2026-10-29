@@ -14,3 +14,7 @@ main_unet.py
 unet_work.ipynb
 configs/META_test.yaml
 tmp/
+.claude
+configs/extra
+runpodctl.exe
+misc

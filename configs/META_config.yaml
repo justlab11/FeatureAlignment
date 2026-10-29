@@ -38,16 +38,50 @@ datasets:
   - name: "Webcam"
     folder: "data/webcam"
     num_classes: 31
+  
+  - name: "Clipart"
+    folder: "data/Clipart"
+    num_classes: 65
+
+  - name: "Real World"
+    folder: "data/RealWorld"
+    num_classes: 65
+
+  - name: "Product"
+    folder: "data/Product"
+    num_classes: 65
+
+  - name: "Art"
+    folder: "data/Art"
+    num_classes: 65
 
 dataset_pairs:
-  # - target: "MNIST"
-  #   source: "Gap_MNIST"
+  - target: 
+      dataset: "MNIST"
+      train_pct: 0.014 # ~1000 samples
+      val_pct: 0.4 # 28k samples
+    source: 
+      dataset: "Gap_MNIST"
+      train_pct: 0.28 # ~20k samples
+      val_pct: 0.4 # 28k samples
 
-  # - target: "MNIST"
-  #   source: "Texture_MNIST"
+  - target: 
+      dataset: "MNIST"
+      train_pct: 0.014 # ~1000 samples
+      val_pct: 0.4 # 28k samples 
 
-  # - target: "MNIST"
-  #   source: "SVHN"
+    source: 
+      dataset: "Texture_MNIST"
+      train_pct: 0.28 # ~20k samples
+      val_pct: 0.4 # 28k samples
+
+  - target: 
+      dataset: "MNIST"
+      train_pct: 0.014 # ~1000 samples
+      val_pct: 0.4 # 28k samples
+    source: 
+      dataset: "SVHN"
+      train_pct: 
 
   # - target: "Cifar10"
   #   source: "Cut_Cifar10"
