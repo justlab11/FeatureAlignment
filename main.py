@@ -23,6 +23,12 @@ def _seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+def _seed_everything(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
 @click.command()
 @click.option("--config_fname", help="Config file path for the script (likely in configs folder)")
 def main(config_fname):
@@ -96,12 +102,9 @@ def main(config_fname):
         os.makedirs(folder, exist_ok=True)
 
     # enable reproducibility
-    torch.manual_seed(RNG)
-    torch.cuda.manual_seed(RNG)
-    np.random.seed(RNG)
+    _seed_everything(RNG)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    random.seed(RNG)
 
     # start logging
     log_location: str = os.path.join(log_folder, f"run_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.log")
@@ -154,16 +157,26 @@ def main(config_fname):
     
     # if we need to generate the dataset splits
     else:
+        target_test_pct = CONFIG.dataset.target.test_pct
+        if target_test_pct is None:
+            target_test_pct = 1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
+
         target_train_split, target_test_split, target_val_split = helpers.build_splits(
             folder=target_dir,
             split_pcts=[
                 CONFIG.dataset.target.train_pct,
                 CONFIG.dataset.target.val_pct,
-                1 - CONFIG.dataset.target.train_pct - CONFIG.dataset.target.val_pct
+                target_test_pct
             ],
             seed=RNG
         )
-        
+
+        # if source holds modified copies of target samples, keep copies of held-out target samples out of source
+        exclude_keys = None
+        if CONFIG.dataset.paired_source:
+            exclude_keys = {helpers.sample_key(f) for f in target_val_split + target_test_split}
+            logger.info(f"Excluding {len(exclude_keys)} held-out target samples from the source domain")
+
         source_train_split, source_test_split, source_val_split = helpers.build_splits(
             folder=source_dir,
             split_pcts=[
@@ -171,7 +184,8 @@ def main(config_fname):
                 CONFIG.dataset.source.val_pct,
                 1 - CONFIG.dataset.source.train_pct - CONFIG.dataset.source.val_pct
             ],
-            seed=RNG
+            seed=RNG,
+            exclude_keys=exclude_keys
         )
 
     train_ds: datasets.CombinedDataset = datasets.CombinedDataset(
@@ -329,6 +343,7 @@ def main(config_fname):
 
     logger.info("\nTraining Base Model")
     base_model_file = f"{MODEL_FOLDER}/base_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    _seed_everything(RNG)  # so the base model does not depend on how much RNG earlier steps consumed
 
     model = helpers.build_classifier(
         model_name=CONFIG.classifier.model,
@@ -362,6 +377,7 @@ def main(config_fname):
 
     logger.info("\nTraining Mixed Model")
     mixed_model_file = f"{MODEL_FOLDER}/mixed_classifier_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    _seed_everything(RNG)
 
     model = helpers.build_classifier(
         model_name=CONFIG.classifier.model,
@@ -396,6 +412,7 @@ def main(config_fname):
     logger.info("\nTraining Contrastive Model")
     contrast_model_file = f"{MODEL_FOLDER}/contrast_body_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
     contrast_full_model_file = f"{MODEL_FOLDER}/contrast_full_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pt"
+    _seed_everything(RNG)
 
     model = helpers.build_classifier(
         model_name=CONFIG.classifier.model,
@@ -503,6 +520,7 @@ def main(config_fname):
         examples_fname=mixed_examples_final_fname,
         device=DEVICE,
         num_epochs=CONFIG.unet.num_epochs,
+        patience=CONFIG.unet.patience,
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
@@ -516,6 +534,7 @@ def main(config_fname):
         examples_fname=contrast_examples_final_fname,
         device=DEVICE,
         num_epochs=CONFIG.unet.num_epochs,
+        patience=CONFIG.unet.patience,
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")

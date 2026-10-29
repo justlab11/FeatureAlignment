@@ -18,3 +18,5 @@ tmp/
 configs/extra
 runpodctl.exe
 misc
+paper
+ABLATION_PLANS.md

@@ -56,32 +56,16 @@ datasets:
     num_classes: 65
 
 dataset_pairs:
-  - target: 
-      dataset: "MNIST"
-      train_pct: 0.014 # ~1000 samples
-      val_pct: 0.4 # 28k samples
-    source: 
-      dataset: "Gap_MNIST"
-      train_pct: 0.28 # ~20k samples
-      val_pct: 0.4 # 28k samples
+  # train/val splits are derived in run_main.py
+  - target: "MNIST"
+    source: "Gap_MNIST"
+    paired: true  # same digits as MNIST, so held-out MNIST digits are removed from the source
 
-  - target: 
-      dataset: "MNIST"
-      train_pct: 0.014 # ~1000 samples
-      val_pct: 0.4 # 28k samples 
+  - target: "MNIST"
+    source: "Texture_MNIST"
 
-    source: 
-      dataset: "Texture_MNIST"
-      train_pct: 0.28 # ~20k samples
-      val_pct: 0.4 # 28k samples
-
-  - target: 
-      dataset: "MNIST"
-      train_pct: 0.014 # ~1000 samples
-      val_pct: 0.4 # 28k samples
-    source: 
-      dataset: "SVHN"
-      train_pct: 
+  - target: "MNIST"
+    source: "SVHN"
 
   # - target: "Cifar10"
   #   source: "Cut_Cifar10"

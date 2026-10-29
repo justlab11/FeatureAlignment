@@ -82,11 +82,12 @@ def main(config_fname):
         meta_config.dataset_pairs,
         meta_config.image_sizes,
         meta_config.unet_loss,
+        meta_config.unet_attention,
         dataset_sizes
     ))
 
     # now iterate through and build the yaml files
-    for pair, img_size, unet_loss, pct in combinations:
+    for pair, img_size, unet_loss, unet_attention, pct in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
 
@@ -112,10 +113,14 @@ def main(config_fname):
         config.dataset.target.folder = target_dataset.folder
         config.dataset.source.folder = source_dataset.folder
 
-        if "mnist" in target_dataset.name.lower():
+        config.dataset.paired_source = pair.paired
+
+        if "mnist" in target_dataset.name.lower() or target_dataset.name.lower() == "svhn":
             config.dataset.target.train_pct = min(1.0, 1000 / target_ds_len)
+            # hold out 10% for test; the rest of the target images stay unused (and available to a paired source)
+            config.dataset.target.test_pct = 0.1
         elif "cifar10" in target_dataset.name.lower():
-            config.dataset.target.train_pct = min(1.0, 4000 / source_ds_len)
+            config.dataset.target.train_pct = min(1.0, 4000 / target_ds_len)
         else:
             config.dataset.target.train_pct = .8
 
@@ -132,8 +137,9 @@ def main(config_fname):
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
         config.unet.loss = unet_loss
+        config.unet.attention = unet_attention
 
-        fname = f"configs/{target_dataset.name}+{source_dataset.name}_{int((source_ds_len) * pct)}_{img_size}.yaml"
+        fname = f"configs/{target_dataset.name}+{source_dataset.name}_{int((source_ds_len) * pct)}_{img_size}_{unet_loss}_{'attn' if unet_attention else 'noattn'}.yaml"
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
 

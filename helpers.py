@@ -27,13 +27,24 @@ def get_splits(folder: str):
 
     return train_files, test_files, val_files
 
-def build_splits(folder: str, split_pcts: List[float], seed):
+def sample_key(path: str):
+    # (class, file name) identifies the same underlying sample across paired datasets (e.g. MNIST and Gap MNIST)
+    return (os.path.basename(os.path.dirname(path)), os.path.basename(path))
+
+def build_splits(folder: str, split_pcts: List[float], seed, exclude_keys=None):
+    """
+    split_pcts are [train, val, test] fractions of the files left after `exclude_keys` are removed.
+    If they sum to less than 1, the remaining files are left unused.
+    """
     # collect list of all files in the folder
     files = glob(
         os.path.join(folder, "**", "*"),
         recursive=True
     )
     files = sorted(f for f in files if os.path.isfile(f))
+
+    if exclude_keys:
+        files = [f for f in files if sample_key(f) not in exclude_keys]
     print(len(files))
     labels = []
     samples = []
@@ -49,14 +60,23 @@ def build_splits(folder: str, split_pcts: List[float], seed):
     # collect split information
     train_size, val_size, test_size = split_pcts
 
+    # leave the unused remainder out so the fractions below are relative to the kept files
+    used = train_size + val_size + test_size
+    if used < 1 - 1e-6:
+        samples, _, labels, _ = train_test_split(
+            samples, labels, train_size=used, random_state=seed, stratify=labels
+        )
+        train_size, val_size, test_size = train_size / used, val_size / used, test_size / used
+
     # build test set first
     X_temp, X_test, y_temp, y_test = train_test_split(
         samples, labels, test_size=test_size, random_state=seed, stratify=labels
     )
 
-    # finalize train and val splits
+    # finalize train and val splits; val_size is a fraction of the whole dataset,
+    # but X_temp only holds (train_size + val_size) of it
     X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size, random_state=seed, stratify=y_temp
+        X_temp, y_temp, test_size=val_size / (train_size + val_size), random_state=seed, stratify=y_temp
     )
 
     # only return the lists of files (the labels are handled by the dataset class)

@@ -470,13 +470,18 @@ class DynamicResNet(nn.Module):
     
     def reset_parameters(self):
         for module in self.model.modules():
-            if isinstance(module, (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)):
-                nn.init.xavier_normal_(module.weight)
+            # mirror the init used at construction (ResNet.__init__) so every classifier starts the same way
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
 
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
+            elif isinstance(module, nn.Linear):
+                module.reset_parameters()
+
             elif isinstance(module, nn.BatchNorm2d):
+                module.reset_running_stats()
                 nn.init.constant_(module.weight, 1)
                 nn.init.constant_(module.bias, 0)
 
@@ -487,6 +492,10 @@ class DynamicResNet(nn.Module):
                 nn.init.zeros_(self.model.fc.bias)
 
     def _hook_fn(self, module, input, output):
+        if isinstance(module, nn.BatchNorm2d):
+            # the following ReLU is in-place and would overwrite this stored activation
+            output = output.clone()
+
         if self.freeze_body:
             self._layer_outputs.append(output.detach())
         else:

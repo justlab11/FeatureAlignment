@@ -10,6 +10,7 @@ class DatasetConfig(BaseModel):
     train_pct: float
     val_pct: float
     num_classes: int
+    test_pct: float | None = None  # defaults to whatever is left after train and val
 
 class DatasetRootConfig(BaseModel):
     target: DatasetConfig
@@ -17,6 +18,9 @@ class DatasetRootConfig(BaseModel):
     image_size: Literal["small", "large"]
     rng_seed: int
     batch_size: int
+    # source samples are modified copies of target samples (same class/file name), so source
+    # must not contain copies of the target's val/test samples
+    paired_source: bool = False
 
 class SaveLocations(BaseModel):
     model_folder: str
@@ -38,6 +42,7 @@ class UNetConfig(BaseModel):
     noise_channels: int
     num_warm_start_epochs: int
     num_epochs: int
+    patience: int = 2  # non-improving align/classify iterations tolerated before a span stops
 
 class Config(BaseModel):
     dataset: DatasetRootConfig
@@ -72,14 +77,10 @@ class MetaDatasetConfig(BaseModel):
     folder: str
     num_classes: int
 
-class DatasetSplits(BaseModel):
-    dataset: str
-    train_pct: float | None
-    val_pct: float | None
-
 class MetaDatasetPair(BaseModel):
-    target: List[DatasetSplits]
-    source: List[DatasetSplits]
+    target: str
+    source: str
+    paired: bool = False  # source is a modified copy of target (see DatasetRootConfig.paired_source)
 
 class MetaConfig(BaseModel):
     datasets: List[MetaDatasetConfig]

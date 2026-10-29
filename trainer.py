@@ -7,6 +7,7 @@ import os
 import logging
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 import gc
+import random
 from typing import List
 import shutil
 
@@ -83,29 +84,30 @@ class ClassifierTrainer:
         """
         self.classifier.to(device)
 
-        if train:
+        # a frozen body must also keep its BatchNorm running stats fixed, so only train mode when the body is trainable
+        if train and not self.classifier.freeze_body:
             self.classifier.train()
         else:
             self.classifier.eval()
 
         self.alignment_model.to(device)
         self.alignment_model.eval()
-        
+
         running_loss = 0.0
         correct = 0
         total = 0
-        
+
         for target_samples, source_samples, labels in dataloader:
             labels = labels.long()
             target_samples, source_samples, labels = (
-                target_samples.to(device), 
-                source_samples.to(device), 
+                target_samples.to(device),
+                source_samples.to(device),
                 labels.to(device)
             )
-            
+
             if train:
                 optimizer.zero_grad()
-            
+
             with torch.set_grad_enabled(train):
                 if target_only:
                     outputs = self.classifier(target_samples)[-1]
@@ -502,8 +504,12 @@ class AlignmentTrainer:
         self.alignment_model.to(device)
         self.classifier.to(device)
 
+        # flags must be False so the hooks don't detach activations (the loss needs grads back to the UNet),
+        # but the classifier weights themselves are fixed here
         self.classifier.set_freeze_head(False)
         self.classifier.set_freeze_body(False)
+        for param in self.classifier.parameters():
+            param.requires_grad_(False)
         self.classifier.eval()
 
         alignment_optimizer = optim.Adam(self.alignment_model.parameters(), lr=3e-4, weight_decay=1e-5)
@@ -529,7 +535,8 @@ class AlignmentTrainer:
                 alignment_optimizer.zero_grad()
 
                 alignment_output = self.alignment_model(source_samples)[-1]
-                target_reps = self.classifier(target_samples)
+                with torch.no_grad():
+                    target_reps = self.classifier(target_samples)
                 source_reps = self.classifier(alignment_output)
 
                 loss = sum(
@@ -569,27 +576,37 @@ class AlignmentTrainer:
 
             self.alignment_model.eval()
             val_loss = 0
-            for target_samples, source_samples, labels in self.val_loader:
-                labels = labels.long()
 
-                target_samples, source_samples, labels = (
-                    target_samples.to(device),
-                    source_samples.to(device),
-                    labels.to(device),
-                )
+            # the val loss depends on the source partner, the random projections and the UNet noise, so use
+            # the same draws every epoch to make the checkpoint selection comparable across epochs
+            py_rng_state = random.getstate()
+            cuda_devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+            with torch.random.fork_rng(devices=cuda_devices):
+                torch.manual_seed(0)
+                random.seed(0)
 
-                with torch.no_grad():
-                    alignment_output = self.alignment_model(source_samples)[-1]
-                    target_reps = self.classifier(target_samples)
-                    source_reps = self.classifier(alignment_output)
+                for target_samples, source_samples, labels in self.val_loader:
+                    labels = labels.long()
 
-                    loss = sum(
-                        compute_layer_loss(target_reps, source_reps, labels, layer, criterion, device)
-                        for layer in layers
+                    target_samples, source_samples, labels = (
+                        target_samples.to(device),
+                        source_samples.to(device),
+                        labels.to(device),
                     )
 
-                val_loss += loss.item()
-            
+                    with torch.no_grad():
+                        alignment_output = self.alignment_model(source_samples)[-1]
+                        target_reps = self.classifier(target_samples)
+                        source_reps = self.classifier(alignment_output)
+
+                        loss = sum(
+                            compute_layer_loss(target_reps, source_reps, labels, layer, criterion, device)
+                            for layer in layers
+                        )
+
+                    val_loss += loss.item()
+            random.setstate(py_rng_state)
+
             val_loss /= len(self.val_loader)
 
             gc.collect()
@@ -657,13 +674,17 @@ class FullTrainer:
             alignment_loss=self.alignment_loss
         )
 
-    def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100):
+    def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100, patience=2):
         num_layers = self.classifier.get_num_layers()
         layers = [i for i in range(num_layers)]
 
         # Save the fixed pre-trained starting point for the classifier
         pretrained_fname = os.path.splitext(classifier_fname)[0] + "-pretrained.pt"
         torch.save(self.classifier.state_dict(), pretrained_fname)
+
+        # Fixed starting point for the alignment model so every span is trained independently
+        initial_alignment_fname = os.path.splitext(alignment_fname)[0] + "-initial.pt"
+        torch.save(self.alignment_model.state_dict(), initial_alignment_fname)
 
         best_layer_val_acc = 0
         best_layer_val_loss = 1e7
@@ -727,12 +748,11 @@ class FullTrainer:
             # Reset classifier to fixed pre-trained starting point for this span
             self.classifier.load_state_dict(torch.load(pretrained_fname, weights_only=True))
 
-            # Save the alignment model's pre-span state so we can reset it between inner iterations if needed
-            pre_span_alignment_fname = os.path.splitext(alignment_fname)[0] + f"-{start_layer}-prespan.pt"
-            torch.save(self.alignment_model.state_dict(), pre_span_alignment_fname)
+            # Reset the alignment model to its initial state for this span
+            self.alignment_model.load_state_dict(torch.load(initial_alignment_fname, weights_only=True))
 
             best_span_val_acc = 0.0
-            prev_iter_val_acc = 0.0
+            iters_without_improvement = 0
 
             inner_iter = 0
             while True:
@@ -777,16 +797,18 @@ class FullTrainer:
 
                 if val_acc > best_span_val_acc:
                     best_span_val_acc = val_acc
+                    iters_without_improvement = 0
                     # Promote working checkpoints to span-best
                     shutil.copy(working_classifier_fname, best_classifier_fname)
                     shutil.copy(working_alignment_fname, best_alignment_fname)
+                else:
+                    iters_without_improvement += 1
 
-                # Stop if val acc didn't improve over the previous inner iteration
-                if inner_iter > 0 and val_acc <= prev_iter_val_acc:
-                    logger.info(f"\tSpan {start_layer}: no improvement, stopping inner loop.")
+                # Stop once val acc hasn't beaten the span's best for `patience` iterations in a row
+                if iters_without_improvement >= patience:
+                    logger.info(f"\tSpan {start_layer}: no improvement for {patience} iteration(s), stopping inner loop.")
                     break
 
-                prev_iter_val_acc = val_acc
                 inner_iter += 1
 
             # Fall back if val acc never exceeded the initial 0.0 (e.g. 0% every inner
@@ -804,7 +826,7 @@ class FullTrainer:
             self.alignment_model.load_state_dict(torch.load(best_alignment_fname, weights_only=True))
 
             # Clean up working and pre-span files
-            for f in [working_classifier_fname, working_alignment_fname, pre_span_alignment_fname]:
+            for f in [working_classifier_fname, working_alignment_fname]:
                 if os.path.exists(f):
                     os.remove(f)
 
@@ -871,6 +893,9 @@ class FullTrainer:
 
         self.classifier.load_state_dict(torch.load(classifier_best_fname, weights_only=True))
         self.alignment_model.load_state_dict(torch.load(alignment_best_fname, weights_only=True))
+
+        if os.path.exists(initial_alignment_fname):
+            os.remove(initial_alignment_fname)
 
         # Save arrays and plots
         inter_layer_distances = np.array(inter_layer_distances)
