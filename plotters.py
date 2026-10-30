@@ -4,17 +4,45 @@ import logging
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.lines import Line2D
 from typing import List, Callable
 from os import path
 
 from losses import ISEBSW, mmdfuse
 from type_defs import DataLoaderSet, EmbeddingSet, ModelSet
 
+logger = logging.getLogger(__name__)
+
+def _span_labels(num_spans: int):
+    """
+    Labels for the layer sets of the cascade. Span k covers layers (num_spans-k)..(num_spans-1),
+    from only the last layer (first) to every layer including the input (last).
+    """
+    last = num_spans - 1
+    labels = []
+    for k in range(1, num_spans + 1):
+        start = num_spans - k
+        if start == last:
+            labels.append(f"{last}")
+        elif start == 0:
+            labels.append(f"Input-{last}")
+        else:
+            labels.append(f"{start}-{last}")
+    return labels
+
+def _to_hwc(img):
+    """Converts a CHW tensor/array to a clipped HWC numpy array that imshow can show."""
+    if isinstance(img, torch.Tensor):
+        img = img.detach().cpu().numpy()
+    return np.clip(np.transpose(img, (1, 2, 0)), 0, 1)
+
 class TSNE_Plotter:
-    def __init__(self, dataloaders: DataLoaderSet, embed_size: int, bs:int):
+    def __init__(self, dataloaders: DataLoaderSet, embed_size: int, bs:int, max_points: int = 2000):
         self.val_loader = dataloaders.val_loader
         self.embed_size = embed_size
         self.bs = bs
+        # t-SNE on every validation sample is slow, so each domain is subsampled to this many points
+        self.max_points = max_points
 
     def _get_embeds(self, model, device, unet_model=None):
         embeds_base = np.zeros((len(self.val_loader.dataset), self.embed_size))
@@ -27,13 +55,14 @@ class TSNE_Plotter:
         if unet_model:
             unet_model.to(device)
             unet_model.eval()
-        
+
         for i, (base, aux, z) in enumerate(self.val_loader):
             base = base.to(device)
             aux = aux.to(device)
             with torch.no_grad():
+                # [-2] is the penultimate layer (the last entry is the logits)
                 outputs_base = model(base)[-2].cpu().numpy()
-                
+
                 if unet_model:
                     aux = unet_model(aux)[-1]
 
@@ -41,9 +70,9 @@ class TSNE_Plotter:
 
                 start = i * self.bs
                 end = start + outputs_base.shape[0]
-                embeds_base[start:end] = outputs_base.squeeze()
-                embeds_aux[start:end] = outputs_aux.squeeze()
-                labels[start:end] = z.cpu().squeeze()
+                embeds_base[start:end] = outputs_base.reshape(outputs_base.shape[0], -1)
+                embeds_aux[start:end] = outputs_aux.reshape(outputs_aux.shape[0], -1)
+                labels[start:end] = z.cpu().reshape(-1)
 
         model_embeds = EmbeddingSet(
             base_embeds = embeds_base,
@@ -52,7 +81,7 @@ class TSNE_Plotter:
         )
 
         return model_embeds
-    
+
     def _add_colorbar(self, fig, ax, color_dict, c_labels):
         colors = [color_dict[i] for i in range(20)]
         cmap = mcolors.ListedColormap(colors)
@@ -63,9 +92,16 @@ class TSNE_Plotter:
         cbar.set_ticklabels(c_labels)
         cbar.set_label("Classes")
 
+    def _subsample(self, embeds: EmbeddingSet, idx):
+        return EmbeddingSet(
+            base_embeds=embeds.base_embeds[idx],
+            aux_embeds=embeds.aux_embeds[idx],
+            labels=embeds.labels[idx],
+        )
+
     def plot_tsne(self, models: ModelSet, accuracies: ModelSet, device,
                   filename, base, aux, unet_models: None|ModelSet=None):
-        
+
         if unet_models:
             base_embeds = self._get_embeds(
                 model=models.base,
@@ -101,6 +137,15 @@ class TSNE_Plotter:
                 device=device,
             )
 
+        # the same validation samples are shown for every model
+        num_samples = len(base_embeds.labels)
+        keep = np.sort(np.random.default_rng(42).choice(
+            num_samples, size=min(num_samples, self.max_points), replace=False
+        ))
+        base_embeds = self._subsample(base_embeds, keep)
+        mixed_embeds = self._subsample(mixed_embeds, keep)
+        contrast_embeds = self._subsample(contrast_embeds, keep)
+
         base_model_embeds = np.concatenate(
             (base_embeds.base_embeds, base_embeds.aux_embeds)
         )
@@ -115,7 +160,7 @@ class TSNE_Plotter:
         contrast_aux_norms = np.linalg.norm(contrast_embeds.aux_embeds, axis=1, keepdims=True)
         contrast_aux_norms = np.maximum(contrast_aux_norms, 1e-12)
         contrast_embeds.aux_embeds = contrast_embeds.aux_embeds / contrast_aux_norms
-        
+
         contrast_model_embeds = np.concatenate(
             (contrast_embeds.base_embeds, contrast_embeds.aux_embeds)
         )
@@ -164,11 +209,11 @@ class TSNE_Plotter:
         ]
 
         base_fname = path.splitext(filename)[0]
-        
+
         for name, tsne_values in tsne_data.items():
             fig, ax = plt.subplots(1, 1, figsize=(8,8))
             plt.rcParams['font.size'] = 16
-            tab20 = plt.cm.get_cmap('tab20')
+            tab20 = plt.get_cmap('tab20')
             color_dict = {i: tab20(i/20) for i in range(20)}
 
             if unet_models and name != "base":
@@ -192,6 +237,11 @@ class TSNE_Plotter:
                 s=30,
             )
 
+            ax.legend(handles=[
+                Line2D([], [], marker="o", linestyle="", color="gray", label="Target"),
+                Line2D([], [], marker="x", linestyle="", color="gray", label="Source"),
+            ], loc="best", fontsize=12)
+
             self._add_colorbar(
                 fig=fig, ax=ax,
                 color_dict=color_dict,
@@ -210,23 +260,25 @@ class EBSW_Plotter:
         self.val_loader = dataloaders.val_loader
         self.batch_size = batch_size
 
-    def run_isebsw(
-        self, model, dataloader, layers, device, target_only=True, alignment_model=None, num_projections=128
+    @torch.no_grad()
+    def _run_divergence(
+        self, divergence: Callable, model, dataloader, layers, device, target_only=True, alignment_model=None
     ):
         """
-        Computes ISEBSW distances for each batch and layer.
+        Computes a divergence for each batch and layer.
 
         Args:
+            divergence (callable): takes two flattened (n, d) feature tensors and returns a float.
             model (nn.Module): The classifier or base model.
-            dataloader (DataLoader): DataLoader for evaluation.
+            dataloader (DataLoader): DataLoader for evaluation. Pass a pure-class loader to get class-conditional values.
             layers (list[int] or int): Layers to evaluate.
             device (torch.device): Device for computation.
-            target_only (bool): If True, compares splits of target; else compares target and alignment_model outputs.
-            alignment_model (nn.Module, optional): Alignment model for transformed comparisons.
-            num_projections (int): Number of projections for ISEBSW.
+            target_only (bool): If True, compares two halves of the target batch (the Target/Target reference);
+                else compares half of the target batch with half of the (optionally aligned) source batch.
+            alignment_model (nn.Module, optional): Alignment model applied to the source samples.
 
         Returns:
-            np.ndarray: Array of shape (num_batches, num_layers) with ISEBSW values.
+            np.ndarray: Array of shape (num_batches, num_layers). Batches that are too small to split are NaN.
         """
         model.to(device)
         model.eval()
@@ -238,7 +290,7 @@ class EBSW_Plotter:
         if isinstance(layers, int):
             layers = [i for i in range(layers+1)]
 
-        total_isebsw_loss = np.zeros((len(dataloader), len(layers)))
+        results = np.full((len(dataloader), len(layers)), np.nan)
 
         for i, (target, source, _) in enumerate(dataloader):
             if target_only:
@@ -269,15 +321,46 @@ class EBSW_Plotter:
             source_outputs = model(source_set)[:layers[-1]+1]
 
             for j, layer in enumerate(layers):
-                target_flat = target_outputs[layer].view(target_outputs[layer].size(0), -1)
-                source_flat = source_outputs[layer].view(source_outputs[layer].size(0), -1)
+                target_flat = target_outputs[layer].reshape(target_outputs[layer].size(0), -1)
+                source_flat = source_outputs[layer].reshape(source_outputs[layer].size(0), -1)
 
-                total_isebsw_loss[i, j] += ISEBSW(
-                    target_flat, source_flat, L=num_projections, device=device
-                ).item() / target_flat.size(0)
+                results[i, j] = divergence(target_flat, source_flat)
 
-        return total_isebsw_loss
-    
+        return results
+
+    def run_isebsw(
+        self, model, dataloader, layers, device, target_only=True, alignment_model=None, num_projections=128
+    ):
+        """
+        Computes ISEBSW distances for each batch and layer (see `_run_divergence`).
+
+        Returns:
+            np.ndarray: Array of shape (num_batches, num_layers) with ISEBSW values.
+        """
+        def divergence(target_flat, source_flat):
+            return ISEBSW(
+                target_flat, source_flat, L=num_projections, device=device
+            ).item() / target_flat.size(0)
+
+        return self._run_divergence(
+            divergence, model, dataloader, layers, device, target_only, alignment_model
+        )
+
+    def run_mmdfuse(
+        self, model, dataloader, layers, device, target_only=True, alignment_model=None
+    ):
+        """
+        Computes MMD-Fuse statistics for each batch and layer (see `_run_divergence`).
+
+        Returns:
+            np.ndarray: Array of shape (num_batches, num_layers) with MMD-Fuse values.
+        """
+        def divergence(target_flat, source_flat):
+            return mmdfuse(target_flat, source_flat, device=device).item()
+
+        return self._run_divergence(
+            divergence, model, dataloader, layers, device, target_only, alignment_model
+        )
 
     def plot_ebsw(
         self,
@@ -286,168 +369,74 @@ class EBSW_Plotter:
         device: str,
         filename: str,
         alignment_models: ModelSet | None = None,
-        num_projections: int = 128
+        num_projections: int = 128,
+        loss: str = "ebsw",
+        log_scale: bool = True
     ):
-        include_alignment = True
-        if alignment_models is None:
-            alignment_models = ModelSet(
-                base=None,
-                mixed=None,
-                contrast=None
-            )
-            include_alignment = False
+        """
+        Plots the layerwise divergence for Target/Target (reference), Target/Source and, if
+        `alignment_models` is given, Target/Aligned-Source for each of the base, mixed and contrast models.
+        """
+        if loss == "ebsw":
+            measure = lambda **kwargs: self.run_isebsw(num_projections=num_projections, **kwargs)
+        else:
+            measure = self.run_mmdfuse
 
-        base_ebsw_inter = self.run_isebsw(
-            model=models.base,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        mixed_ebsw_inter = self.run_isebsw(
-            model=models.mixed,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        contrast_ebsw_inter = self.run_isebsw(
-            model=models.contrast,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=True,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        base_ebsw_intra = self.run_isebsw(
-            model=models.base,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=False,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        mixed_ebsw_intra = self.run_isebsw(
-            model=models.mixed,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=False,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        contrast_ebsw_intra = self.run_isebsw(
-            model=models.contrast,
-            dataloader=self.val_loader,
-            layers=layers,
-            target_only=False,
-            device=device,
-            alignment_model=None,
-            num_projections=num_projections
-        )
-
-        if include_alignment:
-            align_base_ebsw_intra = self.run_isebsw(
-                model=models.base,
-                dataloader=self.val_loader,
-                layers=layers,
-                target_only=False,
-                device=device,
-                alignment_model=alignment_models.base,
-                num_projections=num_projections
-            )
-
-            align_mixed_ebsw_intra = self.run_isebsw(
-                model=models.mixed,
-                dataloader=self.val_loader,
-                layers=layers,
-                target_only=False,
-                device=device,
-                alignment_model=alignment_models.mixed,
-                num_projections=num_projections
-            )
-
-            align_contrast_ebsw_intra = self.run_isebsw(
-                model=models.contrast,
-                dataloader=self.val_loader,
-                layers=layers,
-                target_only=False,
-                device=device,
-                alignment_model=alignment_models.contrast,
-                num_projections=num_projections
-            )
-
-            align_layer_measurements_inter = ModelSet(
-                base=align_base_ebsw_intra,
-                mixed=align_mixed_ebsw_intra,
-                contrast=align_contrast_ebsw_intra
-            ).dict()
-
-        layer_measurements_inter = ModelSet(
-            base=base_ebsw_inter,
-            mixed=mixed_ebsw_inter,
-            contrast=contrast_ebsw_inter
-        ).dict()
-
-        layer_measurements_intra = ModelSet(
-            base=base_ebsw_intra,
-            mixed=mixed_ebsw_intra,
-            contrast=contrast_ebsw_intra
-        ).dict()
-
-        fig, axs = plt.subplots(1, 3, figsize=(20, 7))
-        fig.suptitle('Energy-Based Sliced Wasserstein Loss Initial Layerwise Test Results', fontsize=22)
-
+        include_alignment = alignment_models is not None
         categories = ['base', 'mixed', 'contrast']
 
-        if include_alignment:
-            mode_labels = ['Target/Target', 'Target/Source', "Target/Source Aligned"]
-            colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
-            modes = [layer_measurements_inter, layer_measurements_intra, align_layer_measurements_inter]
-            
-        else:
-            mode_labels = ['Target/Target', 'Target/Source']
-            colors = ['#1f77b4', '#ff7f0e']
-            modes = [layer_measurements_inter, layer_measurements_intra]
+        target_target = {}
+        target_source = {}
+        target_aligned = {}
+
+        for cat in categories:
+            model = getattr(models, cat)
+            common = dict(model=model, dataloader=self.val_loader, layers=layers, device=device)
+
+            target_target[cat] = measure(target_only=True, alignment_model=None, **common)
+            target_source[cat] = measure(target_only=False, alignment_model=None, **common)
+
+            # the base model is never aligned
+            if include_alignment and getattr(alignment_models, cat) is not None:
+                target_aligned[cat] = measure(
+                    target_only=False, alignment_model=getattr(alignment_models, cat), **common
+                )
+
+        series = [
+            ('Target/Target', '#1f77b4', target_target),
+            ('Target/Source', '#ff7f0e', target_source),
+        ]
+        if target_aligned:
+            series.append(('Target/Source Aligned', '#2ca02c', target_aligned))
+
+        fig, axs = plt.subplots(1, 3, figsize=(20, 7))
+        fig.suptitle('Layerwise Divergence on the Validation Set', fontsize=22)
 
         for i, cat in enumerate(categories):
-            for j, mode in enumerate(modes):
-                if i==0 and j==2:
-                    # if we are plotting the base model (i==0) with alignment (j==2)
-                    # just continue as base never has alignment so the plot is useless
+            for j, (label, color, data) in enumerate(series):
+                if cat not in data:
                     continue
-                data = mode[cat]
-                means = np.mean(data, axis=0)
-                stds = np.std(data, axis=0)
-                x = np.array(range(len(means)))
 
-                if len(modes) == 2:
-                    offset = .1*j - 0.05 # proper offset value for two error bars
-                else:
-                    offset = .1*j - .1
+                means = np.nanmean(data[cat], axis=0)
+                stds = np.nanstd(data[cat], axis=0)
+                x = np.arange(len(means))
+
+                offset = 0.1 * j - 0.05 * (len(series) - 1)
 
                 axs[i].grid(True, linestyle=":", alpha=.7)
                 axs[i].errorbar(
                     x+offset, means, yerr=stds, capsize=5, marker='o',
-                    color=colors[j], ecolor=colors[j],
+                    color=color, ecolor=color,
                     markersize=8, linewidth=2, capthick=2,
-                    label=f'{mode_labels[j]} Samples', linestyle='none'
+                    label=f'{label} Samples', linestyle='none'
                 )
+
+            if log_scale:
+                axs[i].set_yscale('log')
 
             axs[i].set_title(f'{cat.capitalize()} Model', fontsize=20)
             axs[i].set_xlabel('Layer', fontsize=16)
-            axs[i].set_ylabel('Average Loss', fontsize=16)
+            axs[i].set_ylabel('Average Divergence', fontsize=16)
             axs[i].tick_params(axis='both', which='major', labelsize=14)
             axs[i].legend(fontsize=12)
 
@@ -463,7 +452,9 @@ class EBSW_Plotter:
 
 def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
     """
-    Plots a grid of example images: original, source, and aligned output.
+    Plots a grid of example images: target, source, and aligned source.
+
+    The source and target in a column are different samples of the same class (the dataset pairs them randomly).
 
     Args:
         dataset: Dataset object supporting indexing.
@@ -480,22 +471,24 @@ def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
 
     for i, sample_idx in enumerate(random_samples):
         target, source, label = dataset[sample_idx]
-        source_adjusted = source.unsqueeze(0).to(device)
-        source_adjusted = alignment_model(source_adjusted)[-1][0]
 
-        target = np.transpose(target, (1, 2, 0))
-        source = np.transpose(source, (1, 2, 0))
-        source_adjusted = np.transpose(source_adjusted.detach().cpu(), (1, 2, 0))
+        with torch.no_grad():
+            source_adjusted = alignment_model(source.unsqueeze(0).to(device))[-1][0]
 
-        axes[0, i].imshow(target)
+        axes[0, i].imshow(_to_hwc(target))
         axes[0, i].axis('off')
-        axes[0, i].set_title(f"Sample {i+1}\nLabel: {label}")
+        axes[0, i].set_title(f"Sample {i+1}\nLabel: {int(label)}")
 
-        axes[1, i].imshow(source)
+        axes[1, i].imshow(_to_hwc(source))
         axes[1, i].axis('off')
 
-        axes[2, i].imshow(source_adjusted)
+        axes[2, i].imshow(_to_hwc(source_adjusted))
         axes[2, i].axis('off')
+
+    # axis('off') hides axis labels, so the row names are drawn as text
+    for row, name in enumerate(["Target", "Source", "Aligned"]):
+        axes[row, 0].text(-0.08, 0.5, name, transform=axes[row, 0].transAxes,
+                          rotation=90, va="center", ha="right", fontsize=12)
 
     plt.tight_layout()
     plt.savefig(filename, format="pdf", dpi=300)
@@ -514,77 +507,165 @@ def plot_dataset_examples(dataset, filename, device, num_samples=10):
     for i, sample_idx in enumerate(random_samples):
         target, source, label = dataset[sample_idx]
 
-        target_img = np.clip(np.transpose(target.numpy(), (1, 2, 0)), 0, 1)
-        source_img = np.clip(np.transpose(source.numpy(), (1, 2, 0)), 0, 1)
-
-        axes[0, i].imshow(target_img)
+        axes[0, i].imshow(_to_hwc(target))
         axes[0, i].axis('off')
         axes[0, i].set_title(f"Label: {int(label)}", fontsize=8)
 
-        axes[1, i].imshow(source_img)
+        axes[1, i].imshow(_to_hwc(source))
         axes[1, i].axis('off')
 
-    axes[0, 0].set_ylabel('Target', fontsize=10)
-    axes[1, 0].set_ylabel('Source', fontsize=10)
+    for row, name in enumerate(["Target", "Source"]):
+        axes[row, 0].text(-0.08, 0.5, name, transform=axes[row, 0].transAxes,
+                          rotation=90, va="center", ha="right", fontsize=10)
 
     plt.tight_layout()
     plt.savefig(filename, format="pdf", dpi=300)
     plt.close(fig)
-    
-def divergence_plots(inter_data, intra_data, val_acc_values, fname):
+
+def divergence_plots(target_target, target_source, val_acc_values, fname, test_acc_values=None):
     """
-    Plots validation accuracy and inter/intra-domain distances across layer sets.
+    Plots accuracy and layerwise divergence across the cascade's layer sets.
 
     Args:
-        inter_data: 2D array (layers x comparisons) of inter-domain distances.
-        intra_data: 2D array (layers x comparisons) of intra-domain distances.
-        val_acc_values: 1D array of validation accuracies.
+        target_target: array (spans+1, batches, layers) of Target/Target divergences (reference floor).
+            Row 0 is before any alignment; row k is after the k-th layer set.
+        target_source: array (spans+1, batches, layers) of Target/Source divergences. Row 0 is the
+            unaligned source; row k is the source aligned for the k-th layer set.
+        val_acc_values: 1D array (spans,) of target validation accuracies in [0, 1].
         fname: Output filename for the plot (PDF).
+        test_acc_values: optional 1D array (spans,) of target test accuracies in [0, 1].
     """
-    inter_data = torch.tensor(inter_data)
-    intra_data = torch.tensor(intra_data)
+    target_target = np.asarray(target_target, dtype=float)
+    target_source = np.asarray(target_source, dtype=float)
 
-    inter_data = inter_data[1:]
-    intra_data = intra_data[1:]
+    # average over batches; NaN batches (too small to split) are ignored
+    tt_mean = np.nanmean(target_target[1:], axis=1)
+    tt_std  = np.nanstd(target_target[1:], axis=1)
+    ts_mean = np.nanmean(target_source[1:], axis=1)
+    ts_std  = np.nanstd(target_source[1:], axis=1)
+    unaligned_ts = np.nanmean(target_source[0], axis=0)
 
-    inter_mean = torch.mean(inter_data, dim=1)
-    inter_std  = torch.std(inter_data, dim=1)
-
-    intra_mean = torch.mean(intra_data, dim=1)
-    intra_std  = torch.std(intra_data, dim=1)
-
-    n = inter_mean.size(0)
+    n = ts_mean.shape[0]
+    num_layers = ts_mean.shape[1]
     x = np.arange(n)
-    # Custom x labels for layer sets
-    x_labels = [f"{i-1}" if i==n else (f"{i-1}-{n-1}" if i>1 else f"Input-{n-1}") for i in range(n, 0, -1)]
+    x_labels = _span_labels(n)
     offset = 0.08
 
-    fig, axes = plt.subplots(inter_mean.size(1)+1, 1, figsize=(6, (inter_mean.size(1)+1)*2+2), sharex=True)
+    fig, axes = plt.subplots(num_layers+1, 1, figsize=(6, (num_layers+1)*2+2), sharex=True)
 
-    # Top plot: validation accuracy
-    axes[0].plot(x, val_acc_values, '-o', color='C2')
+    # Top plot: accuracy
+    axes[0].plot(x, np.asarray(val_acc_values) * 100, '-o', color='C2', label='Validation')
+    if test_acc_values is not None:
+        axes[0].plot(x, np.asarray(test_acc_values) * 100, '-s', color='C3', label='Test')
+        axes[0].legend()
     axes[0].set_ylabel('Accuracy (%)')
-    axes[0].set_title('Validation Accuracy on the Target Dataset')
+    axes[0].set_title('Accuracy on the Target Dataset')
     axes[0].grid(True)
-    axes[0].set_xticks([])
 
-    # Comparison subplots
-    for i in range(inter_mean.size(1)):
-        ax = axes[i+1]
-        ax.errorbar(x - offset, inter_mean[:, i], yerr=inter_std[:, i], fmt='-o', label='Inter-layer', color='C0')
-        ax.errorbar(x + offset, intra_mean[:, i], yerr=intra_std[:, i], fmt='-s', label='Intra-layer', color='C1')
-        ax.set_ylabel(f'Layer {i+1}')
+    # One panel per measured layer
+    for layer in range(num_layers):
+        ax = axes[layer+1]
+        ax.errorbar(x - offset, tt_mean[:, layer], yerr=tt_std[:, layer], fmt='-o', label='Target/Target', color='C0')
+        ax.errorbar(x + offset, ts_mean[:, layer], yerr=ts_std[:, layer], fmt='-s', label='Target/Aligned Source', color='C1')
+        ax.axhline(unaligned_ts[layer], color='C1', linestyle='--', alpha=0.6, label='Target/Source (unaligned)')
+        ax.set_ylabel(f'Layer {layer}')
         ax.grid(True)
-        if i == 0:
-            ax.legend()
+        if layer == 0:
+            ax.legend(fontsize=8)
 
     axes[-1].set_xlabel('Layer Set')
     axes[-1].set_xticks(x)
-    axes[-1].set_xticklabels(x_labels)
-    fig.suptitle("Inter- and Intra-Domain Distances with Validation Accuracy")
+    axes[-1].set_xticklabels(x_labels, rotation=45)
+    fig.suptitle("Layerwise Divergence and Accuracy by Layer Set")
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     plt.savefig(fname, dpi=300, format='pdf', bbox_inches='tight')
     plt.close()
+
+def gap_closed_heatmap(target_target, target_source, fname):
+    """
+    Heatmap of the fraction of the domain gap closed by each layer set at each layer:
+
+        (unaligned Target/Source - aligned Target/Source) / (unaligned Target/Source - Target/Target)
+
+    1 means the aligned source is as close to the target as two target halves are, 0 means no change,
+    and negative values mean the alignment made that layer worse. Cells where there was no gap to close
+    (Target/Source not larger than Target/Target) are left blank.
+
+    Takes the same arrays as `divergence_plots`.
+    """
+    target_target = np.asarray(target_target, dtype=float)
+    target_source = np.asarray(target_source, dtype=float)
+
+    floor = np.nanmean(target_target, axis=(0, 1))
+    unaligned = np.nanmean(target_source[0], axis=0)
+    aligned = np.nanmean(target_source[1:], axis=1)
+
+    gap = unaligned - floor
+    with np.errstate(divide="ignore", invalid="ignore"):
+        closed = (unaligned[None, :] - aligned) / gap[None, :]
+    closed[:, gap <= 1e-12] = np.nan
+
+    n, num_layers = closed.shape
+    fig, ax = plt.subplots(figsize=(1 + 0.9 * num_layers, 1 + 0.5 * n + 1))
+    im = ax.imshow(np.clip(closed, -1, 1), cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
+
+    for r in range(n):
+        for c in range(num_layers):
+            if not np.isnan(closed[r, c]):
+                ax.text(c, r, f"{closed[r, c]:.2f}", ha="center", va="center", fontsize=8)
+
+    ax.set_xticks(np.arange(num_layers))
+    ax.set_xticklabels([str(i) for i in range(num_layers)])
+    ax.set_yticks(np.arange(n))
+    ax.set_yticklabels(_span_labels(n))
+    ax.set_xlabel("Measured layer")
+    ax.set_ylabel("Layer set aligned")
+    ax.set_title("Fraction of Domain Gap Closed")
+    fig.colorbar(im, ax=ax, label="Gap closed (clipped to [-1, 1])")
+
+    plt.tight_layout()
+    plt.savefig(fname, dpi=300, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+
+def span_accuracy_plot(val_acc_values, test_acc_values, fname, best_index=None, reference_accs: dict | None = None):
+    """
+    Plots target accuracy for each layer set.
+
+    Args:
+        val_acc_values: 1D array (spans,) of validation accuracies in [0, 1].
+        test_acc_values: 1D array (spans,) of test accuracies in [0, 1].
+        fname: Output filename for the plot (PDF).
+        best_index: optional index of the selected span, marked with a star.
+        reference_accs: optional {label: accuracy in [0, 1]} drawn as horizontal lines (e.g. the same
+            classifier before alignment).
+    """
+    val_acc_values = np.asarray(val_acc_values) * 100
+    test_acc_values = np.asarray(test_acc_values) * 100
+    n = len(val_acc_values)
+    x = np.arange(n)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(x, val_acc_values, '-o', color='C2', label='Validation')
+    ax.plot(x, test_acc_values, '-s', color='C3', label='Test')
+
+    if best_index is not None:
+        ax.plot([best_index], [test_acc_values[best_index]], marker="*", markersize=16,
+                color="gold", markeredgecolor="black", linestyle="", label="Selected (by validation)")
+
+    for k, (label, acc) in enumerate((reference_accs or {}).items()):
+        ax.axhline(acc * 100, linestyle="--", color=f"C{4+k}", alpha=0.8, label=label)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(_span_labels(n), rotation=45)
+    ax.set_xlabel("Layer Set")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title("Target Accuracy by Layer Set")
+    ax.grid(True, linestyle=":", alpha=0.7)
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(fname, dpi=300, format="pdf", bbox_inches="tight")
+    plt.close(fig)
 
 def incremental_sample_plots(dataloader, unet_fname_set: List[str], device, output_folder: str, build_unet: Callable):
     """
@@ -599,52 +680,47 @@ def incremental_sample_plots(dataloader, unet_fname_set: List[str], device, outp
     Args:
         dataloader (torch.utils.data.DataLoader): Dataloader yielding (x, y, _) batches where
             x are targets and y are source inputs (expects channel-first tensors).
-        unet_fname_set (list[str]): List of file paths to U-Net checkpoints (.pth files).
+        unet_fname_set (list[str]): List of file paths to U-Net checkpoints, in the order they should appear.
         device (torch.device): Device for model inference (e.g., 'cuda').
         output_folder (str): Directory to save PDF plots (files named 'increment_image-{idx}.pdf').
-        unet_size (int): Input size parameter for U-Net architecture.
+        build_unet (Callable): Builds an untrained U-Net with the architecture the checkpoints were saved from.
 
     Returns:
-        None. Saves 16 PDF files to output_folder.
+        None. Saves up to 16 PDF files to output_folder.
 
     Note:
-        - Assumes external `make_unet` function builds the U-Net with size=unet_size,
-          attention=False, base_channels=2, noise_channels=2.
         - Outputs use final layer of U-Net: unet(source)[-1].
-        - Handles 3-channel (RGB) images by transposing to HWC for imshow.
+        - The source and target in a plot are different samples (the dataset pairs same-class samples at random).
         - Memory-efficient: deletes each model after use.
     """
 
     for x,y,_ in dataloader:
         target = x[:16]
-        source = y[:16].to(device)
+        source = y[:16]
         break
 
     outputs = [target]
     for unet_fname in unet_fname_set:
         unet = build_unet()
-        
+
         unet.to(device)
         unet.load_state_dict(torch.load(unet_fname, weights_only=True))
 
         unet.eval()
-        outputs.append(unet(source)[-1].detach().cpu())
+        with torch.no_grad():
+            outputs.append(unet(source.to(device))[-1].detach().cpu())
         del unet
 
-    outputs.append(source)
+    outputs.append(source.cpu())
 
     num_entries = len(outputs)
-    num_items = 16
+    num_items = min(16, target.shape[0])
 
     for item_idx in range(num_items):
         fig, axs = plt.subplots(1, num_entries, figsize=(num_entries*2, 2))
 
         for entry_idx, ax in enumerate(axs):
-            img = outputs[num_entries-entry_idx-1][item_idx]
-            if img.shape[0] == 3:
-                img = np.transpose(img, (1,2,0))
-
-            ax.imshow(img)
+            ax.imshow(_to_hwc(outputs[num_entries-entry_idx-1][item_idx]))
             ax.axis("off")
 
         plt.tight_layout()

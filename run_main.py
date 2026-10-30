@@ -1,7 +1,10 @@
 import subprocess
 import itertools
+import json
 import sys
+import time
 import click
+import torch
 import yaml
 import glob
 import os
@@ -60,9 +63,77 @@ TEMPLATE_YAML = {
     "verbose": False,
 }
 
+def estimate_peak_bytes(fname: str, env: dict) -> int | None:
+    """Per-process GPU memory a run needs, from a CPU-only `main.py --estimate_out` pass (None if that failed)."""
+    out = fname.replace(".yaml", ".gpu.json")
+    result = subprocess.run([sys.executable, "main.py", "--config_fname", fname, "--estimate_out", out], env=env)
+    if result.returncode != 0:
+        return None
+    with open(out) as f:
+        return json.load(f)["process_memory_bytes"]
+
+def run_jobs(jobs: list[str], max_parallel: int, memory_margin: float, env: dict, poll_seconds: int = 30, max_oom_retries: int = 2):
+    """
+    Runs main.py for every config, at most `max_parallel` at a time, as long as the summed peak estimates of the
+    running jobs fit in the GPU budget. A job that dies with a CUDA out-of-memory error goes back in the queue.
+    """
+    if torch.cuda.is_available():
+        free, total = torch.cuda.mem_get_info()
+        # what is already on the card (display server, other users) is not ours to use; the margin covers estimate error
+        budget = total * (1 - memory_margin) - (total - free)
+    else:
+        budget = float("inf")
+
+    peaks = {}
+    if max_parallel > 1:
+        for job in jobs:
+            peaks[job] = estimate_peak_bytes(job, env) or budget  # unknown -> assume it needs the whole budget
+            print(f"{job}: estimated {peaks[job] / 1024**3:.2f} GiB per process (budget {budget / 1024**3:.2f} GiB)")
+
+    queue = sorted(jobs, key=lambda j: -peaks.get(j, 0))  # biggest first so they are not stuck behind small ones
+    running: dict = {}  # job -> (process, stdout file)
+    retries = {job: 0 for job in jobs}
+
+    while queue or running:
+        for job, (proc, log) in list(running.items()):
+            if proc.poll() is None:
+                continue
+            del running[job]
+            if log:
+                log.close()
+            if proc.returncode == 0:
+                print(f"Finished {job}")
+                continue
+            with open(job.replace(".yaml", ".stdout.log"), errors="ignore") as f:
+                out_of_memory = "out of memory" in f.read()[-5000:] if max_parallel > 1 else False
+            if out_of_memory and retries[job] < max_oom_retries:
+                retries[job] += 1
+                print(f"{job} ran out of GPU memory, requeueing (attempt {retries[job] + 1})")
+                queue.append(job)
+            else:
+                print(f"Error: {job} exited with code {proc.returncode}")
+
+        reserved = sum(peaks[j] for j in running)
+        for job in list(queue):
+            if len(running) >= max_parallel:
+                break
+            if running and reserved + peaks[job] > budget:
+                continue  # a job that does not fit has to wait; one that is alone always runs
+            queue.remove(job)
+            reserved += peaks.get(job, 0)
+            print("Starting run for config:", job)
+            log = open(job.replace(".yaml", ".stdout.log"), "w") if max_parallel > 1 else None
+            proc = subprocess.Popen([sys.executable, "main.py", "--config_fname", job], env=env, stdout=log, stderr=subprocess.STDOUT if log else None)
+            running[job] = (proc, log)
+
+        if queue or running:
+            time.sleep(poll_seconds)
+
 @click.command()
 @click.option("--config_fname", help="Meta config file used to build ALL other config files and run main.py on all of them")
-def main(config_fname):
+@click.option("--max_parallel", default=1, show_default=True, help="Runs allowed at once; more than one also needs the summed memory estimates to fit the GPU")
+@click.option("--memory_margin", default=0.1, show_default=True, help="Fraction of GPU memory kept free for estimate error")
+def main(config_fname, max_parallel, memory_margin):
     meta_config: MetaConfig = load_meta_config(config_fname)
 
     dataset_map = {dataset.name: dataset for dataset in meta_config.datasets}
@@ -87,6 +158,7 @@ def main(config_fname):
     ))
 
     # now iterate through and build the yaml files
+    jobs = []
     for pair, img_size, unet_loss, unet_attention, pct in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
@@ -143,19 +215,11 @@ def main(config_fname):
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
 
-        print("Starting run for config:", fname)
+        jobs.append(fname)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = os.pathsep.join(sys.path)
-        try:
-            subprocess.run([
-                "python",
-                "main.py",
-                "--config_fname",
-                fname
-            ], env=env)
-        except Exception as e:
-            print(f"Error: {e}")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    run_jobs(jobs, max_parallel, memory_margin, env)
 
 if __name__=="__main__":
     main()

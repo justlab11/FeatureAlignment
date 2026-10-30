@@ -43,6 +43,8 @@ class UNetConfig(BaseModel):
     num_warm_start_epochs: int
     num_epochs: int
     patience: int = 2  # non-improving align/classify iterations tolerated before a span stops
+    improvement_se: float = 1.0  # a gain counts only if above this many standard errors of the val accuracy
+    alignment_rel_tol: float = 1e-3  # a new best alignment val loss must be this fraction lower than the last best
 
 class Config(BaseModel):
     dataset: DatasetRootConfig

@@ -7,6 +7,7 @@ from typing import Literal, Callable
 import logging
 import click
 import glob
+import json
 import random
 
 import datasets
@@ -17,6 +18,7 @@ import plotters
 import models
 import type_defs
 import samplers
+import estimates
 
 def _seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
@@ -31,7 +33,8 @@ def _seed_everything(seed):
 
 @click.command()
 @click.option("--config_fname", help="Config file path for the script (likely in configs folder)")
-def main(config_fname):
+@click.option("--estimate_out", default=None, help="Only write the GPU memory estimates to this path and exit (no training)")
+def main(config_fname, estimate_out):
     DEVICE: Literal["cpu", "cuda"] = "cuda" if torch.cuda.is_available() else "cpu"
 
     config_yaml = helpers.load_yaml(config_fname)
@@ -287,6 +290,24 @@ def main(config_fname):
         norm_size=norm_size
     )
 
+    logger.info("RUNNING ESTIMATES")
+    logger.info("-----------------")
+    ESTIMATES = estimates.run_estimates(
+        classifier_factory=lambda: models.DynamicResNet(resnet_type=CONFIG.classifier.model, num_classes=TARGET_NUM_CLASSES),
+        unet_factory=build_unet,
+        proj_head=trainer.ClassifierTrainer(
+            classifier=models.DynamicResNet(resnet_type=CONFIG.classifier.model, num_classes=TARGET_NUM_CLASSES),
+            alignment_model=build_unet(),
+            dataloaders=cls_dl_set,
+        ).proj_head,
+        sample=x,
+        batch_size=BATCH_SIZE,
+    )
+    with open(estimate_out or f"{FILE_FOLDER}/gpu_estimations.json", "w") as f:
+        json.dump(ESTIMATES, f, indent=2)
+    if estimate_out:
+        return
+
     init_plots_file: str = f"{IMAGE_FOLDER}/INIT_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
     plotters.plot_dataset_examples(
         dataset=train_ds,
@@ -433,6 +454,7 @@ def main(config_fname):
         classifier_weight_decay=CLASSIFIER_WD
     )
 
+    best_temp = None
     if not os.path.exists(contrast_full_model_file):
         best_temp = contrast_model_trainer.classifier_trainer.contrastive_train_loop(
             filename = contrast_model_file,
@@ -459,6 +481,8 @@ def main(config_fname):
 
     _, contrast_acc = contrast_model_trainer.classifier_trainer.evaluate_model(DEVICE, use_alignment=False, test=True)
     logger.info(f"Contrastive Model Accuracy: {round(contrast_acc*100, 2)}%")
+
+    pre_shiftnet_test_accs = {"base": base_acc, "mixed": mixed_acc, "contrast": contrast_acc}
 
     logger.info("\nGenerating TSNE Plot")
     tsne_plot_file: str = f"{IMAGE_FOLDER}/TSNE_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
@@ -493,18 +517,20 @@ def main(config_fname):
     logger.info("\nGenerating Energy-Based Wasserstein Distance Plot")
     ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
+    # pure-class batches, so the divergence is class-conditional like the alignment loss
     ebsw_plotter = plotters.EBSW_Plotter(
-        dataloaders=cls_dl_set,
+        dataloaders=align_dl_set,
         batch_size=BATCH_SIZE
     )
     num_layers = base_model_trainer.classifier.get_num_layers()
 
     ebsw_plotter.plot_ebsw(
         models=model_set,
-        layers=[i for i in range(num_layers-1)],
+        layers=[i for i in range(num_layers)],
         device=DEVICE,
         filename=ebsw_plot_file,
-        num_projections=256
+        num_projections=256,
+        loss=LOSS
     )
 
     logger.info("\nSTARTING UNET/CLASSIFER TRAIN CYCLES\n------------------------------------")
@@ -521,6 +547,8 @@ def main(config_fname):
         device=DEVICE,
         num_epochs=CONFIG.unet.num_epochs,
         patience=CONFIG.unet.patience,
+        improvement_se=CONFIG.unet.improvement_se,
+        alignment_rel_tol=CONFIG.unet.alignment_rel_tol,
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
@@ -535,6 +563,8 @@ def main(config_fname):
         device=DEVICE,
         num_epochs=CONFIG.unet.num_epochs,
         patience=CONFIG.unet.patience,
+        improvement_se=CONFIG.unet.improvement_se,
+        alignment_rel_tol=CONFIG.unet.alignment_rel_tol,
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")
@@ -610,7 +640,7 @@ def main(config_fname):
     ebsw_plot_file = f"{IMAGE_FOLDER}/DIV_UNET_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 
     ebsw_plotter = plotters.EBSW_Plotter(
-        dataloaders=cls_dl_set,
+        dataloaders=align_dl_set,
         batch_size=BATCH_SIZE
     )
     num_layers = base_model_trainer.classifier.get_num_layers()
@@ -618,11 +648,35 @@ def main(config_fname):
     ebsw_plotter.plot_ebsw(
         models=model_set,
         alignment_models=alignment_models,
-        layers=[i for i in range(num_layers-1)],
+        layers=[i for i in range(num_layers)],
         device=DEVICE,
         filename=ebsw_plot_file,
-        num_projections=256
+        num_projections=256,
+        loss=LOSS
     )
+
+    # everything needed to rebuild the summary plots offline
+    results = {
+        "classifier_id": CLASSIFIER_ID,
+        "config": CONFIG.model_dump(),
+        "split_sizes": {
+            "train": {"target": train_ds.get_target_size(), "source": train_ds.get_source_size()},
+            "val": {"target": val_ds.get_target_size(), "source": val_ds.get_source_size()},
+            "test": {"target": test_ds.get_target_size(), "source": test_ds.get_source_size()},
+        },
+        "contrast_temperature": best_temp,
+        "test_acc_before_shiftnet": pre_shiftnet_test_accs,
+        "test_acc_after_shiftnet": {"base": base_acc, "mixed": mixed_acc, "contrast": contrast_acc},
+        "cascade": {
+            "mixed": mixed_model_trainer.cascade_results,
+            "contrast": contrast_model_trainer.cascade_results,
+        },
+    }
+    if CONFIG.classifier.train_baseline:
+        results["test_acc_autoencoder_baseline"] = baseline_acc
+
+    with open(os.path.join(FILE_FOLDER, "results.json"), "w") as f:
+        json.dump(trainer._jsonable(results), f, indent=2)
 
     logger.info(f"Finished {CLASSIFIER_ID} Dataset")
 

@@ -58,35 +58,21 @@ datasets:
 dataset_pairs:
   # train/val splits are derived in run_main.py
   - target: "MNIST"
-    source: "Gap_MNIST"
-    paired: true  # same digits as MNIST, so held-out MNIST digits are removed from the source
-
-  - target: "MNIST"
-    source: "Texture_MNIST"
-
-  - target: "MNIST"
     source: "SVHN"
 
-  # - target: "Cifar10"
-  #   source: "Cut_Cifar10"
+  - target: "SVHN"
+    source: "MNIST"
 
-  - target: "Amazon"
-    source: "DSLR"
-
-  - target: "Amazon"
-    source: "Webcam"
-
-  - target: "DSLR"
-    source: "Webcam"
-    
-  - target: "DSLR"
-    source: "Amazon"
-
-  - target: "Webcam"
-    source: "Amazon"
-
-  - target: "Webcam"
-    source: "DSLR"
+  # - target: "MNIST"
+  #   source: "Gap_MNIST"
+  #   paired: true  # same digits as MNIST, so held-out MNIST digits are removed from the source
+  #
+  # - target: "MNIST"
+  #   source: "Texture_MNIST"
+  #
+  # - target: "Amazon"
+  #   source: "DSLR"
+  # (other Office-31 / Cifar10 pairs: see git history)
 
 image_sizes:
   - "small"
