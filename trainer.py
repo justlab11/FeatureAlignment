@@ -662,7 +662,8 @@ class FullTrainer:
         alignment_loss: str,
         classifier_name: str,
         classifier_lr: float = 1e-2,
-        classifier_weight_decay: float = 1e-5
+        classifier_weight_decay: float = 1e-5,
+        image_folder: str | None = None,
     ):
         """
         Initializes the FullTrainer, which orchestrates classifier and alignment model training.
@@ -672,7 +673,8 @@ class FullTrainer:
             alignment_model (nn.Module): The model to be aligned (e.g., UNet or other).
             classifier_dataloaders (DataLoaderSet): Dataloaders for classifier training/validation/testing.
             alignment_dataloaders (DataLoaderSet): Dataloaders for alignment training/validation/testing.
-            file_folder (str): Path for saving models and logs.
+            file_folder (str): Path for saving models, arrays and json files.
+            image_folder (str, optional): Path for saving plots (pdf). Defaults to file_folder.
             alignment_loss (str): Loss function for alignment model ('ebsw' or 'mmdfuse').
             classifier_name (str): Name identifier for the classifier.
             classifier_lr (float): Learning rate for the classifier's SGD optimizer.
@@ -684,6 +686,7 @@ class FullTrainer:
         self.classifier_dataloaders: DataLoaderSet = classifier_dataloaders
         self.alignment_dataloaders: DataLoaderSet = alignment_dataloaders
         self.file_folder: str = file_folder
+        self.image_folder: str = image_folder or file_folder
         self.classifier_name: str = classifier_name
         self.cascade_results: dict = {}
 
@@ -974,13 +977,13 @@ class FullTrainer:
             target_source=target_source_distances,
             val_acc_values=classifier_val_accs,
             test_acc_values=classifier_test_accs,
-            fname=os.path.join(self.file_folder, f"{model_name}-divergence_plots.pdf")
+            fname=os.path.join(self.image_folder, f"{model_name}-divergence_plots.pdf")
         )
 
         gap_closed_heatmap(
             target_target=target_target_distances,
             target_source=target_source_distances,
-            fname=os.path.join(self.file_folder, f"{model_name}-gap_closed_heatmap.pdf")
+            fname=os.path.join(self.image_folder, f"{model_name}-gap_closed_heatmap.pdf")
         )
 
         span_accuracy_plot(
@@ -991,7 +994,7 @@ class FullTrainer:
                 f"{model_name} before ShiftNet (val)": pre_alignment_val_acc,
                 f"{model_name} before ShiftNet (test)": pre_alignment_test_acc,
             },
-            fname=os.path.join(self.file_folder, f"{model_name}-span_accuracy.pdf")
+            fname=os.path.join(self.image_folder, f"{model_name}-span_accuracy.pdf")
         )
 
 class PreloaderTrainer:

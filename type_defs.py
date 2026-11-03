@@ -90,3 +90,4 @@ class MetaConfig(BaseModel):
     image_sizes: List[str]
     unet_loss: List[str]
     unet_attention: List[bool]
+    target_train_sizes: List[int] = [1000]  # labeled target training images (MNIST / SVHN targets only)

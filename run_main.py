@@ -154,12 +154,13 @@ def main(config_fname, max_parallel, memory_margin):
         meta_config.image_sizes,
         meta_config.unet_loss,
         meta_config.unet_attention,
-        dataset_sizes
+        dataset_sizes,
+        meta_config.target_train_sizes
     ))
 
     # now iterate through and build the yaml files
     jobs = []
-    for pair, img_size, unet_loss, unet_attention, pct in combinations:
+    for pair, img_size, unet_loss, unet_attention, pct, target_train_size in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
 
@@ -188,7 +189,7 @@ def main(config_fname, max_parallel, memory_margin):
         config.dataset.paired_source = pair.paired
 
         if "mnist" in target_dataset.name.lower() or target_dataset.name.lower() == "svhn":
-            config.dataset.target.train_pct = min(1.0, 1000 / target_ds_len)
+            config.dataset.target.train_pct = min(1.0, target_train_size / target_ds_len)
             # hold out 10% for test; the rest of the target images stay unused (and available to a paired source)
             config.dataset.target.test_pct = 0.1
         elif "cifar10" in target_dataset.name.lower():
@@ -211,7 +212,7 @@ def main(config_fname, max_parallel, memory_margin):
         config.unet.loss = unet_loss
         config.unet.attention = unet_attention
 
-        fname = f"configs/{target_dataset.name}+{source_dataset.name}_{int((source_ds_len) * pct)}_{img_size}_{unet_loss}_{'attn' if unet_attention else 'noattn'}.yaml"
+        fname = f"configs/{target_dataset.name}={int(config.dataset.target.train_pct * target_ds_len)}+{source_dataset.name}={int(source_ds_len * pct)}_{img_size}_{unet_loss}_{'attn' if unet_attention else 'noattn'}.yaml"
         with open(fname, "w") as file:
             yaml.safe_dump(config.model_dump(), file, sort_keys=False)
 

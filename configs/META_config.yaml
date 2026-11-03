@@ -82,3 +82,8 @@ unet_loss:
 
 unet_attention:
   - False
+
+# Experiment 1: small labeled target set (MNIST / SVHN targets only; the 1000-image runs are the baseline)
+target_train_sizes:
+  - 100
+  - 200

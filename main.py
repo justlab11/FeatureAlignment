@@ -380,6 +380,7 @@ def main(config_fname, estimate_out):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
+        image_folder = IMAGE_FOLDER,
         classifier_name="base",
         classifier_lr=CLASSIFIER_LR,
         classifier_weight_decay=CLASSIFIER_WD
@@ -414,6 +415,7 @@ def main(config_fname, estimate_out):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
+        image_folder = IMAGE_FOLDER,
         classifier_name="mixed",
         classifier_lr=CLASSIFIER_LR,
         classifier_weight_decay=CLASSIFIER_WD
@@ -449,6 +451,7 @@ def main(config_fname, estimate_out):
         classifier_dataloaders=cls_dl_set,
         alignment_dataloaders=align_dl_set,
         file_folder = FILE_FOLDER,
+        image_folder = IMAGE_FOLDER,
         classifier_name="contrast",
         classifier_lr=CLASSIFIER_LR,
         classifier_weight_decay=CLASSIFIER_WD
