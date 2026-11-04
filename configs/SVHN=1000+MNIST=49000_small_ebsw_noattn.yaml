@@ -1,0 +1,44 @@
+dataset:
+  target:
+    name: SVHN
+    folder: data/house_mnist_32
+    train_pct: 0.010071609140992456
+    val_pct: 0.010071609140992456
+    num_classes: 10
+    test_pct: 0.10071609140992456
+  source:
+    name: MNIST
+    folder: data/mnist_32
+    train_pct: 0.7
+    val_pct: 0.15000000000000002
+    num_classes: 10
+    test_pct: null
+  image_size: small
+  rng_seed: 72
+  batch_size: 32
+  paired_source: false
+save_locations:
+  model_folder: models
+  file_folder: files
+  image_folder: images
+  logs_folder: logs
+classifier:
+  model: resnet9
+  identifier: SVHN+MNIST
+  mixed_num_epochs: 100
+  contrast_num_epochs: 100
+  train_baseline: false
+unet:
+  loss: ebsw
+  attention: false
+  base_channels: 32
+  noise_channels: 8
+  num_warm_start_epochs: 20
+  num_epochs: 100
+  patience: 2
+  improvement_se: 1.0
+  alignment_rel_tol: 0.001
+  body_lr_scale: 0.0
+  max_inner_iterations: null
+verbose: false
+ablation: normal

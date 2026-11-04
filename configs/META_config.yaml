@@ -56,13 +56,26 @@ datasets:
     num_classes: 65
 
 dataset_pairs:
-  # train/val splits are derived in run_main.py
-  - target: "MNIST"
-    source: "SVHN"
+  # train/val splits are derived in run_main.py; target_*_size (image counts) override the dataset-family defaults
+  # (source sets use a 70 / 15 / 15 split)
 
+  # MNIST -> SVHN (target SVHN of 99,289 images)
   - target: "SVHN"
     source: "MNIST"
+    target_train_size: 1000
+    target_val_size: 1000
+    target_test_size: 10000
 
+  # Webcam -> Amazon (target Amazon of 2,817 images)
+  - target: "Amazon"
+    source: "Webcam"
+    target_train_size: 1000
+    target_val_size: 400
+    target_test_size: 1400
+
+  # - target: "MNIST"
+  #   source: "SVHN"
+  #
   # - target: "MNIST"
   #   source: "Gap_MNIST"
   #   paired: true  # same digits as MNIST, so held-out MNIST digits are removed from the source
@@ -75,7 +88,7 @@ dataset_pairs:
   # (other Office-31 / Cifar10 pairs: see git history)
 
 image_sizes:
-  - "small"
+  - "small"  # 32px practice run; "large" is 224px, which does not fit in memory with the no-stride ResNet-9
 
 unet_loss:
   - "ebsw"
@@ -83,7 +96,13 @@ unet_loss:
 unet_attention:
   - False
 
-# Experiment 1: small labeled target set (MNIST / SVHN targets only; the 1000-image runs are the baseline)
+# Variants run for every combination above, on top of "normal" (definitions and how to add one: ablations.py)
+ablations:
+  - normal
+  - unfreeze_body
+  - no_inner_loop
+
+# Default target train size for MNIST / SVHN targets when a pair does not set target_train_size. Keep a single value
+# (a list multiplies the runs). The small-target experiment is in configs/META_config_small_target.yaml.
 target_train_sizes:
-  - 100
-  - 200
+  - 1000

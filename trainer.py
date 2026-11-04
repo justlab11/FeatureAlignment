@@ -84,6 +84,9 @@ class ClassifierTrainer:
         # per-epoch metrics of the most recent classification_train_loop call
         self.last_history: list = []
 
+        # keep BatchNorm running stats fixed even when the body trains (used when the body is unfrozen at a low lr)
+        self.keep_batchnorm_eval: bool = False
+
     def _classification_run(self, optimizer, dataloader, device, target_only=False, train=True, use_alignment=False):
         """
         Run one epoch of training or evaluation on the given dataset.
@@ -105,6 +108,10 @@ class ClassifierTrainer:
         # a frozen body must also keep its BatchNorm running stats fixed, so only train mode when the body is trainable
         if train and not self.classifier.freeze_body:
             self.classifier.train()
+            if self.keep_batchnorm_eval:
+                for module in self.classifier.modules():
+                    if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                        module.eval()
         else:
             self.classifier.eval()
 
@@ -345,7 +352,7 @@ class ClassifierTrainer:
         logger.info("Contrastive training and head training completed.")
         return best_temp
 
-    def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_alignment=False, min_delta_se=0.0):
+    def classification_train_loop(self, classifier_filename, device, num_epochs=100, target_only=False, use_alignment=False, min_delta_se=0.0, body_lr_scale=0.0):
         """
         Trains the classifier using supervised learning, tracks best validation performance, and saves the best model checkpoint.
 
@@ -357,12 +364,21 @@ class ClassifierTrainer:
             use_alignment (bool, optional): If True, processes inputs with the alignment model before classification. Default is False.
             min_delta_se (float, optional): A new best needs val accuracy above the best so far by this many standard errors
                 of the accuracy (sqrt(p(1-p)/n_val)), so noise-level gains do not move the checkpoint. Default is 0 (any gain).
+            body_lr_scale (float, optional): When the body is trainable, its lr is this fraction of the head's. Default is 0,
+                which means every trainable parameter uses the same lr.
 
         Returns:
             float: Best validation loss achieved during training.
         """
 
-        optimizer = optim.SGD(self.classifier.parameters(), lr=self.lr, momentum=.9,
+        if body_lr_scale > 0 and not self.classifier.freeze_body:
+            body = [p for n, p in self.classifier.named_parameters() if "fc" not in n]
+            head = [p for n, p in self.classifier.named_parameters() if "fc" in n]
+            param_groups = [{"params": body, "lr": self.lr * body_lr_scale}, {"params": head, "lr": self.lr}]
+        else:
+            param_groups = self.classifier.parameters()
+
+        optimizer = optim.SGD(param_groups, lr=self.lr, momentum=.9,
                               nesterov=True, weight_decay=self.weight_decay)
 
         scheduler = CosineAnnealingWarmRestarts(
@@ -391,7 +407,7 @@ class ClassifierTrainer:
                 use_alignment=use_alignment
             )
 
-            current_lr = optimizer.param_groups[0]['lr']
+            current_lr = optimizer.param_groups[-1]['lr']  # the head's lr
             logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
 
             scheduler.step() 
@@ -732,7 +748,7 @@ class FullTrainer:
         return target_target, target_source
 
     def cascading_train_loop(self, classifier_fname, alignment_fname, examples_fname, device, num_epochs=100, patience=2,
-                           improvement_se=1.0, alignment_rel_tol=1e-3):
+                           improvement_se=1.0, alignment_rel_tol=1e-3, body_lr_scale=0.0, max_inner_iterations=None):
         num_layers = self.classifier.get_num_layers()
         n_val = len(self.classifier_dataloaders.val_loader.dataset)
         layers = [i for i in range(num_layers)]
@@ -815,10 +831,12 @@ class FullTrainer:
                     torch.load(working_alignment_fname, weights_only=True)
                 )
 
-                # Step 2: Fine-tune classifier head only (body stays frozen)
+                # Step 2: Fine-tune the classifier head; the body stays frozen unless body_lr_scale > 0 (then it
+                # trains at that fraction of the lr, with BatchNorm stats kept fixed)
                 self.classifier.train()
                 self.classifier.set_freeze_head(False)
-                self.classifier.set_freeze_body(True)
+                self.classifier.set_freeze_body(body_lr_scale <= 0)
+                self.classifier_trainer.keep_batchnorm_eval = body_lr_scale > 0
 
                 self.classifier_trainer.classification_train_loop(
                     classifier_filename=working_classifier_fname,
@@ -826,6 +844,7 @@ class FullTrainer:
                     num_epochs=num_epochs,
                     use_alignment=True,
                     min_delta_se=improvement_se,
+                    body_lr_scale=body_lr_scale,
                 )
                 # Load best classifier weights from this finetuning run
                 self.classifier.load_state_dict(
@@ -855,6 +874,10 @@ class FullTrainer:
                     shutil.copy(working_alignment_fname, best_alignment_fname)
                 else:
                     iters_without_improvement += 1
+
+                if max_inner_iterations is not None and inner_iter + 1 >= max_inner_iterations:
+                    logger.info(f"	Span {start_layer}: reached the cap of {max_inner_iterations} inner iteration(s).")
+                    break
 
                 # Stop once val acc hasn't beaten the span's best for `patience` iterations in a row
                 if iters_without_improvement >= patience:
@@ -955,6 +978,8 @@ class FullTrainer:
             "patience": patience,
             "improvement_se": improvement_se,
             "alignment_rel_tol": alignment_rel_tol,
+            "body_lr_scale": body_lr_scale,
+            "max_inner_iterations": max_inner_iterations,
             "measured_layers": layers,
             "best_layer": best_layer,
             "best_val_acc": best_layer_val_acc,

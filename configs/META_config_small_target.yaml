@@ -1,0 +1,93 @@
+datasets:
+  - name: "MNIST"
+    folder: "data/mnist_32"
+    num_classes: 10
+
+  - name: "Gap_MNIST"
+    folder: "data/mnist_skip_32"
+    num_classes: 10
+
+  - name: "Texture_MNIST"
+    folder: "data/texture_mnist_32"
+    num_classes: 10
+
+  - name: "SVHN"
+    folder: "data/house_mnist_32"
+    num_classes: 10
+
+  - name: "Cifar10"
+    folder: "data/cifar10_32"
+    num_classes: 10
+
+  - name: "Smear_Cifar10"
+    folder: "data/cifar10_smear_32"
+    num_classes: 10
+
+  - name: "Cut_Cifar10"
+    folder: "data/cifar10_cut_32"
+    num_classes: 10
+
+  - name: "Amazon"
+    folder: "data/amazon"
+    num_classes: 31
+  
+  - name: "DSLR"
+    folder: "data/dslr"
+    num_classes: 31
+  
+  - name: "Webcam"
+    folder: "data/webcam"
+    num_classes: 31
+  
+  - name: "Clipart"
+    folder: "data/Clipart"
+    num_classes: 65
+
+  - name: "Real World"
+    folder: "data/RealWorld"
+    num_classes: 65
+
+  - name: "Product"
+    folder: "data/Product"
+    num_classes: 65
+
+  - name: "Art"
+    folder: "data/Art"
+    num_classes: 65
+
+dataset_pairs:
+  # train/val splits are derived in run_main.py
+  - target: "MNIST"
+    source: "SVHN"
+
+  - target: "SVHN"
+    source: "MNIST"
+
+  # - target: "MNIST"
+  #   source: "Gap_MNIST"
+  #   paired: true  # same digits as MNIST, so held-out MNIST digits are removed from the source
+  #
+  # - target: "MNIST"
+  #   source: "Texture_MNIST"
+  #
+  # - target: "Amazon"
+  #   source: "DSLR"
+  # (other Office-31 / Cifar10 pairs: see git history)
+
+image_sizes:
+  - "small"
+
+unet_loss:
+  - "ebsw"
+
+unet_attention:
+  - False
+
+# Experiment 1: small labeled target set (MNIST / SVHN targets only; the 1000-image runs are the baseline)
+target_train_sizes:
+  - 100
+  - 200
+
+# Small validation sets: this is a synthetic test, and validation passes dominate the run time at these train sizes
+target_val_size: 1000
+source_val_size: 2000

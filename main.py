@@ -552,6 +552,8 @@ def main(config_fname, estimate_out):
         patience=CONFIG.unet.patience,
         improvement_se=CONFIG.unet.improvement_se,
         alignment_rel_tol=CONFIG.unet.alignment_rel_tol,
+        body_lr_scale=CONFIG.unet.body_lr_scale,
+        max_inner_iterations=CONFIG.unet.max_inner_iterations,
     )
 
     logger.info("Training UNET/Classifier for Contrast Model")
@@ -568,6 +570,8 @@ def main(config_fname, estimate_out):
         patience=CONFIG.unet.patience,
         improvement_se=CONFIG.unet.improvement_se,
         alignment_rel_tol=CONFIG.unet.alignment_rel_tol,
+        body_lr_scale=CONFIG.unet.body_lr_scale,
+        max_inner_iterations=CONFIG.unet.max_inner_iterations,
     )
 
     logger.info("\nGetting Model Accuracy With UNET Models")

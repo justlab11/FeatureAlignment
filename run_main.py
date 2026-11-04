@@ -10,6 +10,7 @@ import glob
 import os
 from copy import deepcopy
 
+import ablations
 from type_defs import MetaConfig, Config
 
 # load the config into a format we can work with
@@ -62,6 +63,38 @@ TEMPLATE_YAML = {
     },
     "verbose": False,
 }
+
+def target_split_pcts(pair, dataset_name: str, dataset_len: int, train_size: int, meta_config: MetaConfig):
+    """
+    (train, val, test) fractions of the target dataset. Defaults follow the dataset family; a pair's own
+    target_*_size values (image counts) win. test is None when it should be whatever train and val leave over.
+    """
+    name = dataset_name.lower()
+    test = None
+    if "mnist" in name or name == "svhn":
+        train = min(1.0, train_size / dataset_len)
+        # hold out 10% for test; the rest of the target images stay unused (and available to a paired source)
+        test = 0.1
+    elif "cifar10" in name:
+        train = min(1.0, 4000 / dataset_len)
+    else:
+        train = .8
+    val = min(.1, (1 - train) / 2)
+
+    # smaller validation sets make every epoch's validation pass (the bulk of the run time) much cheaper
+    if meta_config.target_val_size is not None:
+        val = min(val, meta_config.target_val_size / dataset_len)
+
+    if pair.target_train_size is not None:
+        train = pair.target_train_size / dataset_len
+    if pair.target_val_size is not None:
+        val = pair.target_val_size / dataset_len
+    if pair.target_test_size is not None:
+        test = pair.target_test_size / dataset_len
+
+    if train + val + (test or 0) > 1 + 1e-9:
+        raise ValueError(f"Target splits for {dataset_name} need more than the {dataset_len} available images")
+    return train, val, test
 
 def estimate_peak_bytes(fname: str, env: dict) -> int | None:
     """Per-process GPU memory a run needs, from a CPU-only `main.py --estimate_out` pass (None if that failed)."""
@@ -146,6 +179,8 @@ def main(config_fname, max_parallel, memory_margin):
         if pair.source not in dataset_map:
             raise ValueError(f"Invalid dataset: {pair.source}")
     
+    ablations.validate(meta_config.ablations)
+
     dataset_options = meta_config.datasets
     #dataset_sizes = [i/10 for i in range(1, 10)]
     dataset_sizes = [.7]
@@ -155,12 +190,14 @@ def main(config_fname, max_parallel, memory_margin):
         meta_config.unet_loss,
         meta_config.unet_attention,
         dataset_sizes,
-        meta_config.target_train_sizes
+        meta_config.target_train_sizes,
+        meta_config.ablations
     ))
 
     # now iterate through and build the yaml files
     jobs = []
-    for pair, img_size, unet_loss, unet_attention, pct, target_train_size in combinations:
+    seen = set()
+    for pair, img_size, unet_loss, unet_attention, pct, target_train_size, ablation in combinations:
         yaml_data = deepcopy(TEMPLATE_YAML)
         config = Config(**yaml_data)
 
@@ -188,19 +225,17 @@ def main(config_fname, max_parallel, memory_margin):
 
         config.dataset.paired_source = pair.paired
 
-        if "mnist" in target_dataset.name.lower() or target_dataset.name.lower() == "svhn":
-            config.dataset.target.train_pct = min(1.0, target_train_size / target_ds_len)
-            # hold out 10% for test; the rest of the target images stay unused (and available to a paired source)
-            config.dataset.target.test_pct = 0.1
-        elif "cifar10" in target_dataset.name.lower():
-            config.dataset.target.train_pct = min(1.0, 4000 / target_ds_len)
-        else:
-            config.dataset.target.train_pct = .8
+        train_pct, val_pct, test_pct = target_split_pcts(pair, target_dataset.name, target_ds_len, target_train_size, meta_config)
+        config.dataset.target.train_pct = train_pct
+        config.dataset.target.val_pct = val_pct
+        config.dataset.target.test_pct = test_pct
 
         config.dataset.source.train_pct = pct
 
-        config.dataset.target.val_pct = min(.1, (1-config.dataset.target.train_pct)/2)
         config.dataset.source.val_pct = (1-pct)/2
+
+        if meta_config.source_val_size is not None:
+            config.dataset.source.val_pct = min(config.dataset.source.val_pct, meta_config.source_val_size / source_ds_len)
 
         config.dataset.target.num_classes = target_dataset.num_classes
         config.dataset.source.num_classes = source_dataset.num_classes
@@ -209,12 +244,20 @@ def main(config_fname, max_parallel, memory_margin):
         config.dataset.batch_size = 32 if img_size == "small" else 16
 
         config.classifier.identifier = f"{target_dataset.name}+{source_dataset.name}"
+        if ablation != "normal":
+            config.classifier.identifier += f"-{ablation}"
         config.unet.loss = unet_loss
         config.unet.attention = unet_attention
 
-        fname = f"configs/{target_dataset.name}={int(config.dataset.target.train_pct * target_ds_len)}+{source_dataset.name}={int(source_ds_len * pct)}_{img_size}_{unet_loss}_{'attn' if unet_attention else 'noattn'}.yaml"
+        suffix = "" if ablation == "normal" else f"_{ablation}"
+        fname = f"configs/{target_dataset.name}={round(config.dataset.target.train_pct * target_ds_len)}+{source_dataset.name}={int(source_ds_len * pct)}_{img_size}_{unet_loss}_{'attn' if unet_attention else 'noattn'}{suffix}.yaml"
+        if fname in seen:  # e.g. a train-size axis that a pair's own target_train_size overrides
+            continue
+        seen.add(fname)
+
+        run_config = ablations.apply(config.model_dump(), ablation)
         with open(fname, "w") as file:
-            yaml.safe_dump(config.model_dump(), file, sort_keys=False)
+            yaml.safe_dump(run_config, file, sort_keys=False)
 
         jobs.append(fname)
 

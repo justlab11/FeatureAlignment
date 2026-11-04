@@ -45,6 +45,8 @@ class UNetConfig(BaseModel):
     patience: int = 2  # non-improving align/classify iterations tolerated before a span stops
     improvement_se: float = 1.0  # a gain counts only if above this many standard errors of the val accuracy
     alignment_rel_tol: float = 1e-3  # a new best alignment val loss must be this fraction lower than the last best
+    body_lr_scale: float = 0.0  # 0 keeps the classifier body frozen in head fine-tuning; >0 trains it at this fraction of the lr
+    max_inner_iterations: int | None = None  # cap on align/classify iterations per span; 1 drops the inner loop
 
 class Config(BaseModel):
     dataset: DatasetRootConfig
@@ -52,6 +54,7 @@ class Config(BaseModel):
     classifier: ClassifierConfig
     unet: UNetConfig
     verbose: bool
+    ablation: str = "normal"  # see ablations.py; recorded here so every run says which variant it is
 
 class DataLoaderSet(BaseModel):
     train_loader: DataLoader
@@ -83,6 +86,10 @@ class MetaDatasetPair(BaseModel):
     target: str
     source: str
     paired: bool = False  # source is a modified copy of target (see DatasetRootConfig.paired_source)
+    # optional target split sizes (image counts) for this pair; unset ones follow the dataset-family defaults in run_main.py
+    target_train_size: int | None = None
+    target_val_size: int | None = None
+    target_test_size: int | None = None
 
 class MetaConfig(BaseModel):
     datasets: List[MetaDatasetConfig]
@@ -90,4 +97,7 @@ class MetaConfig(BaseModel):
     image_sizes: List[str]
     unet_loss: List[str]
     unet_attention: List[bool]
+    ablations: List[str] = ["normal"]  # variants run for every combination (names from ablations.py)
     target_train_sizes: List[int] = [1000]  # labeled target training images (MNIST / SVHN targets only)
+    target_val_size: int | None = None  # cap on target validation images; None keeps the default fraction
+    source_val_size: int | None = None  # cap on source validation images; None keeps the default fraction
