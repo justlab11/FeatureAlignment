@@ -60,8 +60,15 @@ def build_splits(folder: str, split_pcts: List[float], seed, exclude_keys=None):
     # collect split information
     train_size, val_size, test_size = split_pcts
 
-    # leave the unused remainder out so the fractions below are relative to the kept files
     used = train_size + val_size + test_size
+
+    # a stratified split needs at least one sample per class, so a remainder smaller than that cannot be set aside;
+    # it goes to the test set instead
+    if used < 1 - 1e-6 and round(len(samples) * (1 - used)) < len(set(labels)):
+        test_size = 1 - train_size - val_size
+        used = 1.0
+
+    # leave the unused remainder out so the fractions below are relative to the kept files
     if used < 1 - 1e-6:
         samples, _, labels, _ = train_test_split(
             samples, labels, train_size=used, random_state=seed, stratify=labels
