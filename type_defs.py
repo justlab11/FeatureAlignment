@@ -21,6 +21,8 @@ class DatasetRootConfig(BaseModel):
     # source samples are modified copies of target samples (same class/file name), so source
     # must not contain copies of the target's val/test samples
     paired_source: bool = False
+    # random augmentation of the training images only (target and source alike); see transforms.train_augmentations
+    augment: Literal["none", "geometric"] = "none"
 
 class SaveLocations(BaseModel):
     model_folder: str

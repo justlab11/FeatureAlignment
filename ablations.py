@@ -13,6 +13,9 @@ ABLATIONS: dict[str, dict] = {
     "unfreeze_body": {"unet": {"body_lr_scale": 0.01}},
     # everything frozen, one align + head-fit pass per span (no inner loop)
     "no_inner_loop": {"unet": {"max_inner_iterations": 1}},
+    # random shifts / crops on the training images (all three classifiers are retrained with them, so this run also
+    # moves the base / mixed / contrast baselines); see transforms.train_augmentations
+    "augment": {"dataset": {"augment": "geometric"}},
     # both of the above: body trained at a low lr, one align + head-fit pass per span
     "unfreeze_no_inner": {"unet": {"body_lr_scale": 0.01, "max_inner_iterations": 1}},
 }

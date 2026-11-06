@@ -101,7 +101,8 @@ ablations:
   # - normal
   # - unfreeze_body
   # - no_inner_loop
-  - unfreeze_no_inner
+  # - unfreeze_no_inner
+  - augment
 
 # Default target train size for MNIST / SVHN targets when a pair does not set target_train_size. Keep a single value
 # (a list multiplies the runs). The small-target experiment is in configs/META_config_small_target.yaml.

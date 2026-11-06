@@ -143,6 +143,15 @@ def main(config_fname, estimate_out):
             transforms.ToTensor(),
         ])
 
+    # augmentation is for the training images only; validation and test (and so the divergence measures) stay plain
+    image_px = 32 if CONFIG.dataset.image_size == "small" else 224
+    train_transform = transforms.Compose([
+        transforms.Resize(image_px),
+        *tr.train_augmentations(CONFIG.dataset.augment, TARGET, image_px),
+        tr.EnsureThreeChannelsPIL(),
+        transforms.ToTensor(),
+    ])
+
     # if the dataset was premade (doesn't need to be generated)
     if os.path.exists(os.path.join(target_dir, "train")):
         target_train_split, target_test_split, target_val_split = helpers.get_splits(
@@ -195,7 +204,7 @@ def main(config_fname, estimate_out):
         data_folder=target_dir,
         target_split_samples=target_train_split,
         source_split_samples=source_train_split,
-        transform=transform
+        transform=train_transform if not os.path.exists(os.path.join(target_dir, "train")) else transform
     )
 
     test_ds: datasets.CombinedDataset = datasets.CombinedDataset(
