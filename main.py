@@ -615,6 +615,16 @@ def main(config_fname, estimate_out):
         device=DEVICE
     )
 
+    logger.info("Generating Alignment Shift Plots")
+    for name, model_trainer in (("mixed", mixed_model_trainer), ("contrast", contrast_model_trainer)):
+        plotters.plot_alignment_shift(
+            dataset=val_ds,
+            alignment_model=model_trainer.alignment_model,
+            classifier=model_trainer.classifier,
+            filename=f"{IMAGE_FOLDER}/{name}_shift_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf",
+            device=DEVICE
+        )
+
     logger.info("\nGenerating TSNE w/ UNET Plot")
     tsne_plot_file = f"{IMAGE_FOLDER}/TSNE_UNET_{TARGET}={TARGET_TRAIN_SIZE}+{SOURCE}={SOURCE_TRAIN_SIZE}.pdf"
 

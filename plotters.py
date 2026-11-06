@@ -494,6 +494,119 @@ def plot_examples(dataset, alignment_model, filename, device, num_samples=10):
     plt.savefig(filename, format="pdf", dpi=300)
     plt.close(fig)
 
+def plot_alignment_shift(dataset, alignment_model, classifier, filename, device, num_columns=10, num_stats=500, seed=0):
+    """
+    Shows what the alignment model changed: one column per class (the first `num_columns` classes), with rows
+    Source / Aligned / signed change (Aligned - Source, mean over channels, one symmetric scale) / a Target example of the
+    same class. Under each column the frozen classifier's prediction on the source and on the aligned image is marked
+    right (green) or wrong (red). The panel on the right gives the per-channel mean and std of source, aligned and
+    target pixels over `num_stats` dataset samples.
+
+    The target in a column is another sample of the class, so it is a visual reference, not a pixel-wise comparison.
+    The same samples are drawn for a given dataset and seed, so runs and spans can be compared column by column.
+
+    Args:
+        dataset: CombinedDataset to draw from (use the validation set so no training augmentation is applied).
+        alignment_model: Model used to transform the source images.
+        classifier: Classifier whose predictions on source and aligned images are marked.
+        filename: Output filename (PDF).
+        device: Torch device for model inference.
+    """
+    import random as _random
+    from matplotlib.gridspec import GridSpec
+
+    labels = np.array([label for _, label in dataset.target_samples])
+    rng = np.random.RandomState(seed)
+    classes = sorted(set(labels.tolist()))[:num_columns]
+    picks = [int(rng.choice(np.where(labels == c)[0])) for c in classes]
+
+    was_training = (alignment_model.training, classifier.training)
+    alignment_model.to(device).eval()
+    classifier.to(device).eval()
+
+    py_state = _random.getstate()  # the dataset picks a random source partner; do not disturb the run's RNG
+    _random.seed(seed)
+    try:
+        items = [dataset[i] for i in picks]
+        target = torch.stack([t for t, _, _ in items])
+        source = torch.stack([s for _, s, _ in items])
+        truth = torch.tensor([int(l) for _, _, l in items])
+        with torch.no_grad():
+            aligned = alignment_model(source.to(device))[-1].cpu()
+            pred_source = classifier(source.to(device))[-1].argmax(1).cpu()
+            pred_aligned = classifier(aligned.to(device))[-1].argmax(1).cpu()
+
+        # per-channel pixel statistics over a larger sample
+        stat_idx = np.random.RandomState(seed + 1).choice(len(dataset), min(num_stats, len(dataset)), replace=False)
+        sets = {"source": [], "aligned": [], "target": []}
+        with torch.no_grad():
+            for start in range(0, len(stat_idx), 100):
+                batch = [dataset[int(i)] for i in stat_idx[start:start + 100]]
+                t = torch.stack([b[0] for b in batch])
+                s = torch.stack([b[1] for b in batch])
+                a = alignment_model(s.to(device))[-1].cpu()
+                for name, x in (("source", s), ("aligned", a), ("target", t)):
+                    sets[name].append(x)
+        sets = {k: torch.cat(v) for k, v in sets.items()}
+    finally:
+        _random.setstate(py_state)
+        alignment_model.train(was_training[0])
+        classifier.train(was_training[1])
+
+    change = (aligned - source).mean(1)  # (columns, H, W)
+    limit = max(float(change.abs().max()), 1e-6)
+    n = len(picks)
+
+    fig = plt.figure(figsize=(1.6 * n + 4.5, 8.6))
+    grid = GridSpec(4, n + 3, figure=fig, width_ratios=[1] * n + [0.15, 1.1, 2.8], hspace=0.12, wspace=0.08)
+
+    rows = [("Source", source), ("Aligned", aligned), ("Aligned - Source", None), ("Target (same class)", target)]
+    last_change = None
+    for r, (name, imgs) in enumerate(rows):
+        for c in range(n):
+            ax = fig.add_subplot(grid[r, c])
+            if imgs is None:
+                last_change = ax.imshow(change[c].numpy(), cmap="RdBu_r", vmin=-limit, vmax=limit)
+            else:
+                ax.imshow(_to_hwc(imgs[c]))
+            ax.set_xticks([]); ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            if c == 0:
+                ax.set_ylabel(name, fontsize=10)
+            if r == 0:
+                ax.set_title(f"Class {classes[c]}", fontsize=9)
+            if r == 1:
+                ok_s, ok_a = int(pred_source[c]) == int(truth[c]), int(pred_aligned[c]) == int(truth[c])
+                ax.set_xlabel(f"src {int(pred_source[c])}", color="tab:green" if ok_s else "tab:red", fontsize=8, labelpad=2)
+                ax.text(0.5, -0.32, f"aligned {int(pred_aligned[c])}", transform=ax.transAxes, ha="center",
+                        color="tab:green" if ok_a else "tab:red", fontsize=8)
+
+    cax = fig.add_subplot(grid[2, n])
+    fig.colorbar(last_change, cax=cax)
+    cax.tick_params(labelsize=7)
+
+    # distribution panel: per-channel mean and std
+    panel = fig.add_subplot(grid[:, n + 2])
+    width = 0.25
+    colors = {"source": "tab:orange", "aligned": "tab:green", "target": "tab:blue"}
+    for k, name in enumerate(["source", "aligned", "target"]):
+        x = sets[name]
+        means = x.mean(dim=(0, 2, 3)).numpy()
+        stds = x.std(dim=(0, 2, 3)).numpy()
+        panel.bar(np.arange(3) + (k - 1) * width, means, width, yerr=stds, color=colors[name], label=name, capsize=2, alpha=0.85)
+    panel.set_xticks(range(3)); panel.set_xticklabels(["R", "G", "B"])
+    panel.set_ylabel("pixel value (mean, error bar = std)")
+    panel.set_title("Per-channel pixel statistics", fontsize=10)
+    panel.legend(fontsize=8)
+
+    fig.suptitle("Where alignment moved the source (prediction under each column; green = correct)", fontsize=10)
+    try:
+        fig.savefig(filename, format="pdf", dpi=300, bbox_inches="tight")
+    except Exception as e:
+        print(f"Warning: plot could not be saved to {filename}: {e}")
+    plt.close(fig)
+
 def plot_dataset_examples(dataset, filename, device, num_samples=10):
     """
     Plots a grid of example target/source pairs from the dataset

@@ -83,6 +83,7 @@ class ClassifierTrainer:
 
         # per-epoch metrics of the most recent classification_train_loop call
         self.last_history: list = []
+        self.last_domain_acc: dict = {"target": None, "source": None}
 
         # keep BatchNorm running stats fixed even when the body trains (used when the body is unfrozen at a low lr)
         self.keep_batchnorm_eval: bool = False
@@ -121,6 +122,8 @@ class ClassifierTrainer:
         running_loss = 0.0
         correct = 0
         total = 0
+        target_correct = 0
+        source_correct = 0
 
         for target_samples, source_samples, labels in dataloader:
             labels = labels.long()
@@ -141,6 +144,7 @@ class ClassifierTrainer:
                     _, predicted = outputs.max(1)
                     total += labels.size(0)
                     correct += predicted.eq(labels).sum().item()
+                    target_correct += predicted.eq(labels).sum().item()
                 
                 else:
                     if use_alignment:
@@ -155,6 +159,10 @@ class ClassifierTrainer:
                     _, predicted = outputs.max(1)
                     total += labels.size(0) * 2
                     correct += predicted.eq(labels.repeat(2)).sum().item()
+                    # the batch is the target samples followed by the (mapped) source samples
+                    n = labels.size(0)
+                    target_correct += predicted[:n].eq(labels).sum().item()
+                    source_correct += predicted[n:].eq(labels).sum().item()
             
             if train:
                 loss.backward()
@@ -164,6 +172,13 @@ class ClassifierTrainer:
         
         epoch_loss = running_loss / len(dataloader)
         epoch_accuracy = correct / total
+
+        # accuracy per domain of this epoch; the pooled number above is half source when training on both
+        n_each = total if target_only else total // 2
+        self.last_domain_acc = {
+            "target": target_correct / n_each,
+            "source": None if target_only else source_correct / n_each,
+        }
         
         return epoch_loss, epoch_accuracy
     
@@ -407,6 +422,8 @@ class ClassifierTrainer:
                 use_alignment=use_alignment
             )
 
+            train_domain_acc = dict(self.last_domain_acc)  # the val pass below overwrites it
+
             current_lr = optimizer.param_groups[-1]['lr']  # the head's lr
             logger.debug(f"Epoch {epoch+1}: Current LR: {current_lr:.2e}")
 
@@ -422,9 +439,12 @@ class ClassifierTrainer:
             )
 
             log_message = f"	Epoch {epoch+1}: Train- {train_loss:.4f} {train_acc*100:.2f}, Val- {val_loss:.4f} {val_acc*100:.2f}"
+            if train_domain_acc["source"] is not None:
+                log_message += f", Train target/source- {train_domain_acc['target']*100:.2f}/{train_domain_acc['source']*100:.2f}"
             self.last_history.append({
                 "epoch": epoch + 1, "lr": current_lr,
                 "train_loss": train_loss, "train_acc": train_acc,
+                "train_target_acc": train_domain_acc["target"], "train_source_acc": train_domain_acc["source"],
                 "val_loss": val_loss, "val_acc": val_acc,
             })
 
