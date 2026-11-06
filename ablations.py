@@ -13,6 +13,8 @@ ABLATIONS: dict[str, dict] = {
     "unfreeze_body": {"unet": {"body_lr_scale": 0.01}},
     # everything frozen, one align + head-fit pass per span (no inner loop)
     "no_inner_loop": {"unet": {"max_inner_iterations": 1}},
+    # both of the above: body trained at a low lr, one align + head-fit pass per span
+    "unfreeze_no_inner": {"unet": {"body_lr_scale": 0.01, "max_inner_iterations": 1}},
 }
 
 def validate(names: list[str]) -> None:

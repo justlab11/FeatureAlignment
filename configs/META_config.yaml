@@ -98,9 +98,10 @@ unet_attention:
 
 # Variants run for every combination above, on top of "normal" (definitions and how to add one: ablations.py)
 ablations:
-  - normal
-  - unfreeze_body
-  - no_inner_loop
+  # - normal
+  # - unfreeze_body
+  # - no_inner_loop
+  - unfreeze_no_inner
 
 # Default target train size for MNIST / SVHN targets when a pair does not set target_train_size. Keep a single value
 # (a list multiplies the runs). The small-target experiment is in configs/META_config_small_target.yaml.
