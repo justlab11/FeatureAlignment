@@ -146,11 +146,11 @@ def run_jobs(jobs: list[str], max_parallel: int, memory_margin: float, env: dict
             else:
                 print(f"Error: {job} exited with code {proc.returncode}")
 
-        reserved = sum(peaks[j] for j in running)
+        reserved = sum(peaks.get(j, 0) for j in running)
         for job in list(queue):
             if len(running) >= max_parallel:
                 break
-            if running and reserved + peaks[job] > budget:
+            if running and reserved + peaks.get(job, 0) > budget:
                 continue  # a job that does not fit has to wait; one that is alone always runs
             queue.remove(job)
             reserved += peaks.get(job, 0)
